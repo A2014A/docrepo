@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>מאגר מסמכים</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700&family=Frank+Ruhl+Libre:wght@400;700&display=swap" rel="stylesheet"/>
+<style>
+:root{--bg:#F5F2EC;--bg2:#EDEAE2;--card:#fff;--ink:#1A1814;--ink2:#6B6760;--ink3:#A09D98;--accent:#2D5A3D;--accent2:#4A8C60;--accent-light:#E8F2EB;--border:rgba(26,24,20,.1);--border2:rgba(26,24,20,.18);--shadow:0 2px 12px rgba(26,24,20,.08);--shadow-lg:0 8px 32px rgba(26,24,20,.12);--radius:10px;--radius-lg:16px;}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Heebo',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;direction:rtl;}
+header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
+.logo{font-family:'Frank Ruhl Libre',serif;font-size:1.3rem;font-weight:700;display:flex;align-items:center;gap:10px;}
+.logo svg{width:26px;height:26px;fill:none;stroke:#fff;stroke-width:1.8;}
+.header-actions{display:flex;align-items:center;gap:10px;}
+.btn{padding:8px 18px;border-radius:var(--radius);font-family:'Heebo',sans-serif;font-size:.875rem;font-weight:500;cursor:pointer;border:none;transition:all .18s;}
+.btn-ghost{background:rgba(255,255,255,.12);color:#fff;} .btn-ghost:hover{background:rgba(255,255,255,.22);}
+.btn-accent{background:var(--accent);color:#fff;} .btn-accent:hover{background:#234a31;}
+.btn-outline{background:transparent;color:var(--ink2);border:1px solid var(--border2);font-family:'Heebo',sans-serif;font-size:.875rem;} .btn-outline:hover{background:var(--bg2);}
+.admin-badge{font-size:.72rem;background:rgba(255,255,255,.2);color:#fff;padding:3px 10px;border-radius:99px;font-weight:500;}
+.hero{background:var(--accent);padding:3rem 2rem 4rem;text-align:center;color:#fff;position:relative;overflow:hidden;}
+.hero::before{content:'';position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='30' cy='30' r='1' fill='rgba(255,255,255,0.07)'/%3E%3C/svg%3E") repeat;}
+.hero h1{font-family:'Frank Ruhl Libre',serif;font-size:2.2rem;font-weight:700;margin-bottom:.5rem;position:relative;}
+.hero p{font-size:1rem;opacity:.8;margin-bottom:2rem;position:relative;}
+.search-wrap{max-width:600px;margin:0 auto;position:relative;}
+.search-wrap input{width:100%;padding:14px 50px 14px 20px;border-radius:50px;border:none;font-family:'Heebo',sans-serif;font-size:1rem;background:#fff;color:var(--ink);box-shadow:var(--shadow-lg);outline:none;direction:rtl;}
+.search-wrap input:focus{box-shadow:0 8px 32px rgba(26,24,20,.2);}
+.search-icon{position:absolute;left:18px;top:50%;transform:translateY(-50%);color:var(--ink3);pointer-events:none;}
+.search-icon svg{width:20px;height:20px;}
+.stats-bar{background:var(--bg2);border-bottom:1px solid var(--border);padding:.75rem 2rem;display:flex;gap:2rem;align-items:center;justify-content:center;flex-wrap:wrap;}
+.stat-item{font-size:.875rem;color:var(--ink2);display:flex;gap:6px;align-items:center;} .stat-item strong{color:var(--ink);font-weight:700;}
+.main{max-width:1200px;margin:0 auto;padding:2rem;display:grid;grid-template-columns:230px 1fr;gap:2rem;align-items:start;}
+.sidebar{position:sticky;top:80px;}
+.sidebar-section{margin-bottom:1.5rem;}
+.sidebar-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--ink3);margin-bottom:.75rem;}
+.tag-list{display:flex;flex-direction:column;gap:3px;}
+.tag-btn{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;border-radius:var(--radius);border:none;background:transparent;cursor:pointer;font-family:'Heebo',sans-serif;font-size:.875rem;color:var(--ink2);transition:all .15s;text-align:right;width:100%;}
+.tag-btn:hover{background:var(--bg2);color:var(--ink);} .tag-btn.active{background:var(--accent-light);color:var(--accent);font-weight:500;}
+.tag-count{font-size:.72rem;background:var(--bg2);color:var(--ink3);padding:1px 7px;border-radius:99px;flex-shrink:0;}
+.tag-btn.active .tag-count{background:var(--accent);color:#fff;}
+.content-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:10px;}
+.results-info{font-size:.9rem;color:var(--ink2);} .results-info strong{color:var(--ink);}
+.sort-select{padding:6px 12px;border-radius:var(--radius);border:1px solid var(--border2);background:var(--card);font-family:'Heebo',sans-serif;font-size:.875rem;color:var(--ink);cursor:pointer;outline:none;}
+.docs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;}
+.doc-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.25rem;display:flex;flex-direction:column;gap:10px;transition:all .2s;animation:fadeUp .3s ease both;}
+.doc-card:hover{box-shadow:var(--shadow-lg);border-color:var(--border2);transform:translateY(-2px);}
+.doc-card.is-hidden{border-color:#fbbf24;border-style:dashed;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.doc-card-top{display:flex;align-items:flex-start;gap:12px;}
+.doc-type-icon{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;flex-shrink:0;}
+.icon-pdf{background:#fef2f2;color:#b91c1c;} .icon-word{background:#eff6ff;color:#1d4ed8;} .icon-excel{background:#f0fdf4;color:#15803d;}
+.icon-ppt{background:#fff7ed;color:#c2410c;} .icon-img{background:#fdf4ff;color:#7e22ce;} .icon-other{background:var(--bg2);color:var(--ink2);}
+.doc-info{flex:1;min-width:0;}
+.doc-name{font-size:.925rem;font-weight:500;color:var(--ink);line-height:1.4;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.doc-meta{font-size:.75rem;color:var(--ink3);}
+.badges{display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
+.badge{font-size:.68rem;padding:2px 8px;border-radius:99px;font-weight:500;}
+.badge-type{background:#EEF2FF;color:#3730a3;} .badge-hidden{background:#FEF3C7;color:#92400E;}
+.doc-tags{display:flex;gap:5px;flex-wrap:wrap;}
+.tag-pill{font-size:.68rem;padding:2px 8px;border-radius:99px;background:var(--accent-light);color:var(--accent);font-weight:500;}
+.doc-card-footer{display:flex;gap:6px;margin-top:2px;}
+.dl-btn{flex:1;padding:7px;border-radius:var(--radius);border:1px solid var(--border2);background:transparent;font-family:'Heebo',sans-serif;font-size:.78rem;color:var(--ink2);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s;text-decoration:none;}
+.dl-btn:hover{background:var(--accent-light);color:var(--accent);border-color:var(--accent2);}
+.dl-btn svg,.icon-btn svg{width:14px;height:14px;}
+.icon-btn{padding:7px 9px;border-radius:var(--radius);border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--ink3);display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.icon-btn:hover{background:var(--bg2);color:var(--ink);} .icon-btn.del:hover{background:#fef2f2;color:#b91c1c;border-color:#fecaca;}
+.empty-state{grid-column:1/-1;text-align:center;padding:4rem 2rem;color:var(--ink3);}
+.empty-state svg{width:48px;height:48px;stroke:var(--ink3);margin-bottom:1rem;}
+.loading{grid-column:1/-1;text-align:center;padding:3rem;color:var(--ink3);}
+.spinner{width:30px;height:30px;border:3px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 1rem;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(26,24,20,.5);z-index:300;align-items:center;justify-content:center;padding:1rem;}
+.modal-bg.open{display:flex;}
+.modal{background:var(--card);border-radius:var(--radius-lg);padding:2rem;width:min(640px,100%);box-shadow:var(--shadow-lg);animation:popIn .2s ease;max-height:90vh;overflow-y:auto;}
+@keyframes popIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;}
+.modal-title{font-family:'Frank Ruhl Libre',serif;font-size:1.2rem;font-weight:700;}
+.modal-close{background:none;border:none;cursor:pointer;color:var(--ink3);padding:4px;border-radius:6px;transition:background .15s;} .modal-close:hover{background:var(--bg2);}
+.modal-close svg{width:20px;height:20px;display:block;}
+.form-group{margin-bottom:.875rem;}
+.form-label{font-size:.82rem;font-weight:500;color:var(--ink2);display:block;margin-bottom:5px;}
+.form-input,.form-select{width:100%;padding:8px 12px;border-radius:var(--radius);border:1px solid var(--border2);font-family:'Heebo',sans-serif;font-size:.875rem;color:var(--ink);background:var(--bg);outline:none;direction:rtl;transition:border .15s;}
+.form-input:focus,.form-select:focus{border-color:var(--accent2);background:#fff;}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid var(--border2);border-radius:var(--radius);background:var(--bg);}
+.toggle-row label:first-child{font-size:.875rem;color:var(--ink);}
+.toggle{position:relative;width:40px;height:22px;flex-shrink:0;}
+.toggle input{opacity:0;width:0;height:0;}
+.toggle-slider{position:absolute;inset:0;background:#ccc;border-radius:99px;cursor:pointer;transition:.2s;}
+.toggle-slider:before{content:'';position:absolute;width:16px;height:16px;right:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s;}
+.toggle input:checked+.toggle-slider{background:var(--accent);}
+.toggle input:checked+.toggle-slider:before{right:21px;}
+.drop-zone{border:2px dashed var(--border2);border-radius:var(--radius-lg);padding:1.5rem;text-align:center;cursor:pointer;transition:all .2s;margin-bottom:1rem;color:var(--ink3);}
+.drop-zone:hover,.drop-zone.active{border-color:var(--accent2);background:var(--accent-light);color:var(--accent);}
+.drop-zone svg{width:28px;height:28px;margin-bottom:6px;} .drop-zone p{font-size:.9rem;} .drop-zone small{font-size:.75rem;opacity:.7;}
+.modal-footer{display:flex;gap:10px;justify-content:flex-end;margin-top:1.25rem;}
+.tags-input-wrap{display:flex;gap:5px;flex-wrap:wrap;border:1px solid var(--border2);border-radius:var(--radius);padding:5px 10px;background:var(--bg);min-height:38px;align-items:center;cursor:text;}
+.tags-input-wrap:focus-within{border-color:var(--accent2);background:#fff;}
+.ti-pill{background:var(--accent-light);color:var(--accent);font-size:.75rem;padding:2px 7px;border-radius:99px;display:flex;align-items:center;gap:3px;}
+.ti-pill button{background:none;border:none;cursor:pointer;color:inherit;padding:0;font-size:.9rem;line-height:1;}
+.tag-input-bare{border:none;outline:none;background:transparent;font-family:'Heebo',sans-serif;font-size:.82rem;color:var(--ink);min-width:70px;flex:1;direction:rtl;}
+.alert{padding:10px 14px;border-radius:var(--radius);font-size:.85rem;margin-bottom:1rem;}
+.alert-error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;}
+
+/* ── PER-FILE FORM ── */
+.file-forms{display:flex;flex-direction:column;gap:12px;margin-bottom:1rem;}
+.file-form{border:1px solid var(--border2);border-radius:var(--radius-lg);padding:1rem;background:var(--bg);position:relative;}
+.file-form-header{display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;user-select:none;}
+.file-form-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.62rem;font-weight:700;flex-shrink:0;}
+.file-form-filename{font-size:.85rem;font-weight:500;color:var(--ink);flex:1;}
+.file-form-size{font-size:.75rem;color:var(--ink3);}
+.file-form-toggle{font-size:.75rem;color:var(--ink3);}
+.file-form-body{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.file-form-body .full{grid-column:1/-1;}
+
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--ink);color:#fff;padding:11px 22px;border-radius:50px;font-size:.875rem;box-shadow:var(--shadow-lg);opacity:0;transition:all .3s;pointer-events:none;z-index:500;white-space:nowrap;}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+@media(max-width:768px){.main{grid-template-columns:1fr;padding:1rem;}.sidebar{position:static;}.hero{padding:2rem 1rem 3rem;}.hero h1{font-size:1.6rem;}.file-form-body{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+    מאגר מסמכים
+  </div>
+  <div class="header-actions" id="headerActions">
+    <button class="btn btn-ghost" onclick="openLogin()">כניסת מנהל</button>
+  </div>
+</header>
+
+<section class="hero">
+  <h1>מאגר המסמכים הארגוני</h1>
+  <p>חפש, מצא והורד מסמכים בקלות</p>
+  <div class="search-wrap">
+    <input type="text" id="searchInput" placeholder="חיפוש לפי שם, סוג, תויות..." oninput="debounceSearch()" autocomplete="off"/>
+    <span class="search-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    </span>
+  </div>
+</section>
+
+<div class="stats-bar" id="statsBar"><div class="stat-item"><strong>—</strong> מסמכים</div></div>
+
+<main class="main">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">סוג מסמך</div>
+      <div class="tag-list" id="doctypeList"></div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">תויות</div>
+      <div class="tag-list" id="tagList"></div>
+    </div>
+    <div class="sidebar-section" id="adminUploadSection" style="display:none">
+      <div class="sidebar-title">ניהול</div>
+      <button class="btn btn-accent" style="width:100%;padding:10px" onclick="openUpload()">+ העלאת מסמכים</button>
+      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
+    </div>
+  </aside>
+  <section>
+    <div class="content-header">
+      <div class="results-info" id="resultsInfo"></div>
+      <select class="sort-select" id="sortSelect" onchange="loadDocs()">
+        <option value="date-desc">מהחדש לישן</option>
+        <option value="date-asc">מהישן לחדש</option>
+        <option value="name-asc">שם א-ת</option>
+        <option value="name-desc">שם ת-א</option>
+      </select>
+    </div>
+    <div class="docs-grid" id="docsGrid"><div class="loading"><div class="spinner"></div>טוען מסמכים...</div></div>
+  </section>
+</main>
+
+<!-- UPLOAD MODAL -->
+<div class="modal-bg" id="uploadModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">העלאת מסמכים</div>
+      <button class="modal-close" onclick="closeUpload()" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div id="uploadAlert"></div>
+    <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <p>לחץ לבחירת קבצים או גרור לכאן</p>
+      <small>ניתן לבחור מספר קבצים — עד 50MB לקובץ</small>
+    </div>
+    <input type="file" id="fileInput" style="display:none" onchange="onFilesChosen(this)" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.txt" multiple/>
+    <!-- טפסים דינמיים לכל קובץ -->
+    <div class="file-forms" id="fileForms"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeUpload()">ביטול</button>
+      <button class="btn btn-accent" id="uploadSubmitBtn" onclick="submitUpload()">העלה</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-bg" id="editModal">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <div class="modal-title">עריכת מסמך</div>
+      <button class="modal-close" onclick="closeEdit()" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div id="editAlert"></div>
+    <div class="form-group"><label class="form-label">שם המסמך</label><input type="text" class="form-input" id="editName"/></div>
+    <div class="form-group">
+      <label class="form-label">סוג מסמך</label>
+      <select class="form-select" id="editDocType">
+        <option value="">— בחר סוג —</option>
+        <option value="בקשות">בקשות</option>
+        <option value="תעודות כשרות">תעודות כשרות</option>
+        <option value="דוחות יצור">דוחות יצור</option>
+        <option value="אישורי רבנות">אישורי רבנות</option>
+        <option value="אחר">אחר</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">תויות</label>
+      <div class="tags-input-wrap" id="editTagsWrap" onclick="document.getElementById('editTagInput').focus()">
+        <input id="editTagInput" class="tag-input-bare" placeholder="הוסף תויה..." onkeydown="handleEditTag(event)"/>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">תיאור</label><input type="text" class="form-input" id="editDesc" placeholder="תיאור..."/></div>
+    <div class="form-group">
+      <div class="toggle-row">
+        <label for="editHidden">מסמך מוסתר (גלוי למנהל בלבד)</label>
+        <label class="toggle"><input type="checkbox" id="editHidden"/><span class="toggle-slider"></span></label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeEdit()">ביטול</button>
+      <button class="btn btn-accent" onclick="submitEdit()">שמור שינויים</button>
+    </div>
+  </div>
+</div>
+
+<!-- LOGIN MODAL -->
+<div class="modal-bg" id="loginModal">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <div class="modal-title">כניסת מנהל</div>
+      <button class="modal-close" onclick="closeLogin()" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div id="loginAlert"></div>
+    <div class="form-group"><label class="form-label">שם משתמש</label><input type="text" class="form-input" id="loginUser" placeholder="admin" onkeydown="if(event.key==='Enter')doLogin()"/></div>
+    <div class="form-group"><label class="form-label">סיסמה</label><input type="password" class="form-input" id="loginPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"/></div>
+    <button class="btn btn-accent" style="width:100%" onclick="doLogin()">כניסה</button>
+  </div>
+</div>
+
+<!-- CHANGE PASSWORD MODAL -->
+<div class="modal-bg" id="changePassModal">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <div class="modal-title">שינוי סיסמה</div>
+      <button class="modal-close" onclick="closeChangePass()" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div id="passAlert"></div>
+    <div class="form-group"><label class="form-label">סיסמה נוכחית</label><input type="password" class="form-input" id="currentPass" placeholder="••••••••"/></div>
+    <div class="form-group"><label class="form-label">סיסמה חדשה</label><input type="password" class="form-input" id="newPass" placeholder="••••••••"/></div>
+    <div class="form-group"><label class="form-label">אימות סיסמה חדשה</label><input type="password" class="form-input" id="confirmPass" placeholder="••••••••"/></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeChangePass()">ביטול</button>
+      <button class="btn btn-accent" onclick="submitChangePass()">עדכן סיסמה</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const API='';
+let token=localStorage.getItem('docrepo_token')||null;
+let currentUser=null,activeTag='הכל',activeDoctype='הכל';
+let editTags=[],chosenFiles=[],editingDocId=null,searchTimer=null;
+// per-file tag state: array of arrays
+let fileTags=[];
+
+const DOCTYPE_OPTIONS=['בקשות','תעודות כשרות','דוחות יצור','אישורי רבנות','אחר'];
+
+function authHeaders(){return token?{'Authorization':'Bearer '+token}:{};}
+function decodeToken(t){try{return JSON.parse(atob(t.split('.')[1]));}catch{return null;}}
+
+function initAuth(){
+  if(!token)return;
+  const p=decodeToken(token);
+  if(!p||p.exp*1000<Date.now()){token=null;localStorage.removeItem('docrepo_token');return;}
+  currentUser=p;showAdminUI();
+}
+function showAdminUI(){
+  document.getElementById('headerActions').innerHTML=`<span class="admin-badge">מנהל: ${currentUser.username}</span><button class="btn btn-ghost" onclick="logout()">יציאה</button>`;
+  document.getElementById('adminUploadSection').style.display='block';
+  loadAll();
+}
+
+async function apiFetch(path,opts={}){
+  const res=await fetch(API+path,{...opts,headers:{'Content-Type':'application/json',...authHeaders(),...(opts.headers||{})}});
+  if(!res.ok){const e=await res.json().catch(()=>({error:'שגיאת שרת'}));throw new Error(e.error||'שגיאה');}
+  return res.json();
+}
+
+async function loadStats(){
+  try{
+    const s=await apiFetch('/api/stats');
+    document.getElementById('statsBar').innerHTML=`<div class="stat-item"><strong>${s.total}</strong> מסמכים</div><div class="stat-item"><strong>${s.tags}</strong> תויות</div><div class="stat-item"><strong>${s.types}</strong> סוגי קבצים</div>`;
+  }catch{}
+}
+
+async function loadTags(){
+  try{
+    const[tags,dtypes,stats]=await Promise.all([apiFetch('/api/tags'),apiFetch('/api/doctypes'),apiFetch('/api/stats')]);
+    const total=stats.total;
+    document.getElementById('doctypeList').innerHTML=[{doctype:'הכל',count:total},...dtypes].map(({doctype,count})=>
+      `<button class="tag-btn${doctype===activeDoctype?' active':''}" onclick="setDoctype('${doctype}')"><span>${doctype}</span><span class="tag-count">${count}</span></button>`
+    ).join('');
+    document.getElementById('tagList').innerHTML=[{tag:'הכל',count:total},...tags].map(({tag,count})=>
+      `<button class="tag-btn${tag===activeTag?' active':''}" onclick="setTag('${tag}')"><span>${tag}</span><span class="tag-count">${count}</span></button>`
+    ).join('');
+  }catch{}
+}
+
+async function loadDocs(){
+  const q=document.getElementById('searchInput').value.trim();
+  const sort=document.getElementById('sortSelect').value;
+  const params=new URLSearchParams({sort});
+  if(q)params.set('q',q);
+  if(activeTag!=='הכל')params.set('tag',activeTag);
+  if(activeDoctype!=='הכל')params.set('doctype',activeDoctype);
+  const grid=document.getElementById('docsGrid');
+  grid.innerHTML='<div class="loading"><div class="spinner"></div>טוען...</div>';
+  try{
+    const docs=await apiFetch('/api/docs?'+params);
+    document.getElementById('resultsInfo').innerHTML=`נמצאו <strong>${docs.length}</strong> מסמכים`;
+    if(!docs.length){grid.innerHTML=`<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg><p>לא נמצאו מסמכים</p></div>`;return;}
+    grid.innerHTML=docs.map((d,i)=>renderCard(d,i)).join('');
+  }catch(e){grid.innerHTML=`<div class="empty-state"><p>שגיאה: ${e.message}</p></div>`;}
+}
+
+function loadAll(){loadStats();loadTags();loadDocs();}
+
+function iconInfo(ext){
+  const m={pdf:'icon-pdf PDF',docx:'icon-word DOC',doc:'icon-word DOC',xlsx:'icon-excel XLS',xls:'icon-excel XLS',pptx:'icon-ppt PPT',ppt:'icon-ppt PPT',jpg:'icon-img IMG',jpeg:'icon-img IMG',png:'icon-img IMG'};
+  const[cls,label]=(m[ext]||'icon-other קובץ').split(' ');return{cls,label};
+}
+function fmtDate(s){return new Date(s).toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric'});}
+
+function renderCard(d,i){
+  const ic=iconInfo(d.ext);const isAdm=!!token;
+  return `<article class="doc-card${d.hidden?' is-hidden':''}" style="animation-delay:${i*.04}s">
+    <div class="doc-card-top">
+      <div class="doc-type-icon ${ic.cls}">${ic.label}</div>
+      <div class="doc-info">
+        <div class="doc-name" title="${d.name}">${d.name}</div>
+        <div class="doc-meta">${fmtDate(d.created_at)} · ${d.size_label}</div>
+      </div>
+    </div>
+    <div class="badges">
+      ${d.doctype?`<span class="badge badge-type">${d.doctype}</span>`:''}
+      ${d.hidden&&isAdm?`<span class="badge badge-hidden">מוסתר</span>`:''}
+    </div>
+    ${d.description?`<p style="font-size:.8rem;color:var(--ink2);line-height:1.4">${d.description}</p>`:''}
+    ${(d.tags||[]).length?`<div class="doc-tags">${d.tags.map(t=>`<span class="tag-pill">${t}</span>`).join('')}</div>`:''}
+    <div class="doc-card-footer">
+      <a class="dl-btn" href="/api/docs/${d.id}/download" download>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
+      </a>
+      ${isAdm?`
+      <button class="icon-btn" onclick="openEdit(${d.id})" title="עריכה">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      </button>
+      <button class="icon-btn del" onclick="deleteDoc(${d.id})" title="מחיקה">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+      </button>`:''}
+    </div>
+  </article>`;
+}
+
+function setTag(t){activeTag=t;loadTags();loadDocs();}
+function setDoctype(t){activeDoctype=t;loadTags();loadDocs();}
+function debounceSearch(){clearTimeout(searchTimer);searchTimer=setTimeout(loadDocs,350);}
+
+async function deleteDoc(id){
+  if(!confirm('למחוק מסמך זה?'))return;
+  try{await apiFetch(`/api/docs/${id}`,{method:'DELETE'});showToast('המסמך נמחק');loadAll();}
+  catch(e){showToast(e.message);}
+}
+
+/* ══════════ UPLOAD ══════════ */
+function openUpload(){document.getElementById('uploadModal').classList.add('open');}
+
+function closeUpload(){
+  document.getElementById('uploadModal').classList.remove('open');
+  document.getElementById('uploadAlert').innerHTML='';
+  document.getElementById('fileInput').value='';
+  document.getElementById('fileForms').innerHTML='';
+  chosenFiles=[];fileTags=[];
+  const btn=document.getElementById('uploadSubmitBtn');
+  btn.disabled=false;btn.textContent='העלה';
+}
+
+function typeIcon(ext){
+  const m={pdf:'icon-pdf',docx:'icon-word',doc:'icon-word',xlsx:'icon-excel',xls:'icon-excel',pptx:'icon-ppt',ppt:'icon-ppt',jpg:'icon-img',jpeg:'icon-img',png:'icon-img'};
+  return m[ext]||'icon-other';
+}
+
+function onFilesChosen(inp){
+  chosenFiles=Array.from(inp.files);
+  if(!chosenFiles.length)return;
+  fileTags=chosenFiles.map(()=>[]);
+  const container=document.getElementById('fileForms');
+  const dtOpts=DOCTYPE_OPTIONS.map(o=>`<option value="${o}">${o}</option>`).join('');
+  container.innerHTML=chosenFiles.map((f,i)=>{
+    const ext=f.name.split('.').pop().toLowerCase();
+    const baseName=f.name.replace(/\.[^.]+$/,'');
+    const size=f.size>1048576?(f.size/1048576).toFixed(1)+' MB':Math.round(f.size/1024)+' KB';
+    return `<div class="file-form">
+      <div class="file-form-header">
+        <div class="doc-type-icon ${typeIcon(ext)}" style="width:32px;height:32px;font-size:.6rem">${ext.toUpperCase().slice(0,3)}</div>
+        <div class="file-form-filename">${f.name}</div>
+        <div class="file-form-size">${size}</div>
+      </div>
+      <div class="file-form-body">
+        <div class="form-group full">
+          <label class="form-label">שם המסמך</label>
+          <input type="text" class="form-input" id="fname_${i}" value="${baseName}" placeholder="שם המסמך..."/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">סוג מסמך</label>
+          <select class="form-select" id="ftype_${i}">
+            <option value="">— בחר סוג —</option>
+            ${dtOpts}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">תיאור</label>
+          <input type="text" class="form-input" id="fdesc_${i}" placeholder="תיאור..."/>
+        </div>
+        <div class="form-group full">
+          <label class="form-label">תויות (הקלד ולחץ Enter)</label>
+          <div class="tags-input-wrap" id="ftagwrap_${i}" onclick="document.getElementById('ftag_${i}').focus()">
+            <input id="ftag_${i}" class="tag-input-bare" placeholder="הוסף תויה..." onkeydown="handleFileTag(event,${i})"/>
+          </div>
+        </div>
+        <div class="form-group full">
+          <div class="toggle-row">
+            <label for="fhidden_${i}">מסמך מוסתר (גלוי למנהל בלבד)</label>
+            <label class="toggle"><input type="checkbox" id="fhidden_${i}"/><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+const dropZone=document.getElementById('dropZone');
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('active');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('active'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('active');if(e.dataTransfer.files.length)onFilesChosen({files:e.dataTransfer.files});});
+
+function handleFileTag(e,i){
+  if(e.key==='Enter'||e.key===','){
+    e.preventDefault();
+    const v=e.target.value.trim().replace(/,$/,'');
+    if(v&&!fileTags[i].includes(v)){fileTags[i].push(v);renderFilePills(i);}
+    e.target.value='';
+  }
+}
+
+function renderFilePills(i){
+  const wrap=document.getElementById(`ftagwrap_${i}`);
+  if(!wrap)return;
+  wrap.innerHTML=fileTags[i].map((t,j)=>
+    `<span class="ti-pill">${t}<button onclick="removeFileTag(${i},${j})" aria-label="הסר">×</button></span>`
+  ).join('')+`<input id="ftag_${i}" class="tag-input-bare" placeholder="${fileTags[i].length?'':'הוסף תויה...'}" onkeydown="handleFileTag(event,${i})"/>`;
+}
+
+function removeFileTag(i,j){fileTags[i].splice(j,1);renderFilePills(i);}
+
+async function submitUpload(){
+  if(!chosenFiles.length){document.getElementById('uploadAlert').innerHTML='<div class="alert alert-error">נא לבחור קובץ</div>';return;}
+  const btn=document.getElementById('uploadSubmitBtn');
+  btn.disabled=true;btn.textContent=`מעלה ${chosenFiles.length} קבצים...`;
+  try{
+    // העלה כל קובץ בנפרד עם המאפיינים שלו
+    for(let i=0;i<chosenFiles.length;i++){
+      const name=(document.getElementById(`fname_${i}`)?.value.trim())||chosenFiles[i].name.replace(/\.[^.]+$/,'');
+      const doctype=document.getElementById(`ftype_${i}`)?.value||'';
+      const desc=document.getElementById(`fdesc_${i}`)?.value.trim()||'';
+      const hidden=document.getElementById(`fhidden_${i}`)?.checked||false;
+      const tags=fileTags[i].length?fileTags[i]:[];
+      const fd=new FormData();
+      fd.append('file',chosenFiles[i]);
+      fd.append('name',name);
+      fd.append('description',desc);
+      fd.append('tags',JSON.stringify(tags));
+      fd.append('doctype',doctype);
+      fd.append('hidden',hidden);
+      const res=await fetch(API+'/api/docs',{method:'POST',headers:authHeaders(),body:fd});
+      if(!res.ok)throw new Error(`שגיאה בהעלאת ${chosenFiles[i].name}`);
+      btn.textContent=`הועלו ${i+1} מתוך ${chosenFiles.length}...`;
+    }
+    closeUpload();
+    showToast(`${chosenFiles.length===1?'המסמך הועלה':chosenFiles.length+' מסמכים הועלו'} בהצלחה!`);
+    loadAll();
+  }catch(e){
+    document.getElementById('uploadAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;
+    btn.disabled=false;btn.textContent='העלה';
+  }
+}
+
+/* ══════════ EDIT ══════════ */
+async function openEdit(id){
+  const docs=await apiFetch('/api/docs');
+  const d=docs.find(x=>x.id===id);if(!d)return;
+  editingDocId=id;editTags=[...(d.tags||[])];
+  document.getElementById('editName').value=d.name;
+  document.getElementById('editDesc').value=d.description||'';
+  document.getElementById('editDocType').value=d.doctype||'';
+  document.getElementById('editHidden').checked=!!d.hidden;
+  document.getElementById('editAlert').innerHTML='';
+  renderEditPills();
+  document.getElementById('editModal').classList.add('open');
+}
+function closeEdit(){document.getElementById('editModal').classList.remove('open');editingDocId=null;editTags=[];}
+
+function handleEditTag(e){
+  if(e.key==='Enter'||e.key===','){
+    e.preventDefault();
+    const v=e.target.value.trim().replace(/,$/,'');
+    if(v&&!editTags.includes(v)){editTags.push(v);renderEditPills();}
+    e.target.value='';
+  }
+}
+function renderEditPills(){
+  const wrap=document.getElementById('editTagsWrap');
+  wrap.innerHTML=editTags.map((t,i)=>
+    `<span class="ti-pill">${t}<button onclick="removeEditTag(${i})" aria-label="הסר">×</button></span>`
+  ).join('')+`<input id="editTagInput" class="tag-input-bare" placeholder="${editTags.length?'':'הוסף תויה...'}" onkeydown="handleEditTag(event)"/>`;
+}
+function removeEditTag(i){editTags.splice(i,1);renderEditPills();}
+
+async function submitEdit(){
+  const name=document.getElementById('editName').value.trim();
+  if(!name){document.getElementById('editAlert').innerHTML='<div class="alert alert-error">נא להזין שם</div>';return;}
+  try{
+    await apiFetch(`/api/docs/${editingDocId}`,{method:'PATCH',body:JSON.stringify({
+      name,description:document.getElementById('editDesc').value.trim(),
+      tags:editTags,doctype:document.getElementById('editDocType').value,
+      hidden:document.getElementById('editHidden').checked
+    })});
+    closeEdit();showToast('המסמך עודכן בהצלחה');loadAll();
+  }catch(e){document.getElementById('editAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
+}
+
+/* ══════════ LOGIN ══════════ */
+function openLogin(){document.getElementById('loginModal').classList.add('open');}
+function closeLogin(){document.getElementById('loginModal').classList.remove('open');document.getElementById('loginAlert').innerHTML='';}
+async function doLogin(){
+  const username=document.getElementById('loginUser').value.trim();
+  const password=document.getElementById('loginPass').value;
+  try{
+    const data=await apiFetch('/api/auth/login',{method:'POST',body:JSON.stringify({username,password})});
+    token=data.token;localStorage.setItem('docrepo_token',token);
+    currentUser=decodeToken(token);closeLogin();showAdminUI();showToast(`ברוך הבא, ${data.username}!`);
+  }catch(e){document.getElementById('loginAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
+}
+function logout(){
+  token=null;currentUser=null;localStorage.removeItem('docrepo_token');
+  document.getElementById('headerActions').innerHTML=`<button class="btn btn-ghost" onclick="openLogin()">כניסת מנהל</button>`;
+  document.getElementById('adminUploadSection').style.display='none';
+  loadAll();showToast('התנתקת בהצלחה');
+}
+
+/* ══════════ CHANGE PASSWORD ══════════ */
+function openChangePass(){document.getElementById('changePassModal').classList.add('open');}
+function closeChangePass(){
+  document.getElementById('changePassModal').classList.remove('open');
+  ['currentPass','newPass','confirmPass'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('passAlert').innerHTML='';
+}
+async function submitChangePass(){
+  const cur=document.getElementById('currentPass').value;
+  const nw=document.getElementById('newPass').value;
+  const conf=document.getElementById('confirmPass').value;
+  const alertEl=document.getElementById('passAlert');
+  if(nw!==conf){alertEl.innerHTML='<div class="alert alert-error">הסיסמאות אינן תואמות</div>';return;}
+  if(nw.length<4){alertEl.innerHTML='<div class="alert alert-error">סיסמה חייבת להיות לפחות 4 תווים</div>';return;}
+  try{await apiFetch('/api/auth/password',{method:'PATCH',body:JSON.stringify({currentPassword:cur,newPassword:nw})});closeChangePass();showToast('הסיסמה עודכנה');}
+  catch(e){alertEl.innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
+}
+
+/* ══════════ TOAST ══════════ */
+let toastTimer;
+function showToast(msg){
+  const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2800);
+}
+
+initAuth();loadStats();loadTags();loadDocs();
+</script>
+</body>
+</html>

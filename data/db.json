@@ -1,0 +1,140 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "admin",
+      "password": "$2a$10$B4mvNbzIqCSqLODkSvBdS.BPsmKbPAFtmONbfAU153F5w.cx8VNXW",
+      "role": "admin"
+    }
+  ],
+  "documents": [
+    {
+      "id": 9,
+      "name": "קרם קוקוס סילברמיל רובין רבנות",
+      "description": "",
+      "filename": "1780590290451-seakulmqnzq.pdf",
+      "original_name": "×§×¨× ×§××§××¡ ×¡××××¨××× ×¨×××× ×¨×× ××ª.pdf",
+      "ext": "pdf",
+      "size_bytes": 320469,
+      "tags": [],
+      "doctype": "אישורי רבנות",
+      "hidden": false,
+      "uploader": "admin",
+      "created_at": "2026-06-04T16:24:50.505Z"
+    },
+    {
+      "id": 8,
+      "name": "‎⁨שמנת צמחית עבור אחים כהן 5.26⁩",
+      "description": "קהילות",
+      "filename": "1780590290175-6jwuyuaiklj.pdf",
+      "original_name": "ââ¨×©×× ×ª ×¦××××ª ×¢×××¨ ×××× ××× 5.26â©.pdf",
+      "ext": "pdf",
+      "size_bytes": 1182488,
+      "tags": [],
+      "doctype": "תעודות כשרות",
+      "hidden": false,
+      "uploader": "admin",
+      "created_at": "2026-06-04T16:24:50.435Z"
+    },
+    {
+      "id": 7,
+      "name": "רסק עגבניות לנדא",
+      "description": "",
+      "filename": "1780590290104-at6u5o6b8mv.pdf",
+      "original_name": "×¨×¡×§ ×¢××× ×××ª ×× ××.pdf",
+      "ext": "pdf",
+      "size_bytes": 322853,
+      "tags": [],
+      "doctype": "אישורי רבנות",
+      "hidden": false,
+      "uploader": "admin",
+      "created_at": "2026-06-04T16:24:50.156Z"
+    },
+    {
+      "id": 6,
+      "name": "20042027 משקד שקדים בריסטה",
+      "description": "",
+      "filename": "1780590290040-r75twz3z609.pdf",
+      "original_name": "20042027 ××©×§× ×©×§××× ××¨××¡××.pdf",
+      "ext": "pdf",
+      "size_bytes": 323157,
+      "tags": [],
+      "doctype": "אישורי רבנות",
+      "hidden": false,
+      "uploader": "admin",
+      "created_at": "2026-06-04T16:24:50.088Z"
+    },
+    {
+      "id": 5,
+      "name": "שמנת צמחית לבישול- 06052027",
+      "description": "",
+      "filename": "1780590289982-uxfrwywy0kc.pdf",
+      "original_name": "×©×× ×ª ×¦××××ª ××××©××- 06052027.pdf",
+      "ext": "pdf",
+      "size_bytes": 326997,
+      "tags": [],
+      "doctype": "אישורי רבנות",
+      "hidden": false,
+      "uploader": "admin",
+      "created_at": "2026-06-04T16:24:50.025Z"
+    },
+    {
+      "id": 4,
+      "name": "מיונז הולנדי אמיתי 18112027",
+      "description": "",
+      "filename": "1780590289923-5gdpo8qleh.pdf",
+      "original_name": "×××× × ×××× ×× ××××ª× 18112027.pdf",
+      "ext": "pdf",
+      "size_bytes": 322549,
+      "tags": [],
+      "doctype": "אישורי רבנות",
+      "hidden": false,
+      "uploader": "admin",
+      "created_at": "2026-06-04T16:24:49.968Z"
+    },
+    {
+      "id": 3,
+      "name": "זיתים לטרוואליס 02- רבנות",
+      "description": "זיתים קלמטה שונים",
+      "filename": "1780590289858-5ffy6unql2s.pdf",
+      "original_name": "×××ª×× ×××¨××××××¡ 02- ×¨×× ××ª.pdf",
+      "ext": "pdf",
+      "size_bytes": 341275,
+      "tags": [],
+      "doctype": "אישורי רבנות",
+      "hidden": false,
+      "uploader": "admin",
+      "created_at": "2026-06-04T16:24:49.905Z"
+    },
+    {
+      "id": 2,
+      "name": "שמן זית ALIMENTARI CIEMME איטלקי",
+      "description": "",
+      "filename": "1780590289791-3620wvpddaz.pdf",
+      "original_name": "×©×× ×××ª ALIMENTARI CIEMME ×××××§×.pdf",
+      "ext": "pdf",
+      "size_bytes": 317274,
+      "tags": [],
+      "doctype": "אישורי רבנות",
+      "hidden": false,
+      "uploader": "admin",
+      "created_at": "2026-06-04T16:24:49.841Z"
+    },
+    {
+      "id": 1,
+      "name": "שמן זית ALIMENTARI CIEMME איטלקי",
+      "description": "",
+      "filename": "1780587770412-4xwp2ko88pq.pdf",
+      "original_name": "×©×× ×××ª ALIMENTARI CIEMME ×××××§×.pdf",
+      "ext": "pdf",
+      "size_bytes": 317274,
+      "tags": [
+        "כללי"
+      ],
+      "uploader": "admin",
+      "created_at": "2026-06-04T15:42:50.478Z"
+    }
+  ],
+  "nextDocId": 10,
+  "nextUserId": 2
+}
