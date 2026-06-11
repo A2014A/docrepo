@@ -107,11 +107,11 @@ app.get('/api/skus', (req, res) => {
 });
 
 app.post('/api/skus', requireAuth, (req, res) => {
-  const { id, name, supplier } = req.body;
+  const { id, name, supplier, tipus, source, responsible, kashrus, pesach, notes } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'חסרים מספר ושם' });
   if (db.get('skus').find({ id: String(id) }).value())
     return res.status(400).json({ error: 'מקט כבר קיים' });
-  const sku = { id: String(id), name, supplier: supplier||'' };
+  const sku = { id: String(id), name, supplier: supplier||'', tipus: tipus||'', source: source||'', responsible: responsible||'', kashrus: kashrus||'', pesach: pesach||'', notes: notes||'' };
   db.get('skus').push(sku).write();
   res.status(201).json(sku);
 });
@@ -119,10 +119,16 @@ app.post('/api/skus', requireAuth, (req, res) => {
 app.patch('/api/skus/:id', requireAuth, (req, res) => {
   const sku = db.get('skus').find({ id: req.params.id }).value();
   if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
-  const { name, supplier } = req.body;
+  const { name, supplier, tipus, source, responsible, kashrus, pesach, notes } = req.body;
   const updates = {};
-  if (name     !== undefined) updates.name     = name;
-  if (supplier !== undefined) updates.supplier = supplier;
+  if (name        !== undefined) updates.name        = name;
+  if (supplier    !== undefined) updates.supplier    = supplier;
+  if (tipus       !== undefined) updates.tipus       = tipus;
+  if (source      !== undefined) updates.source      = source;
+  if (responsible !== undefined) updates.responsible = responsible;
+  if (kashrus     !== undefined) updates.kashrus     = kashrus;
+  if (pesach      !== undefined) updates.pesach      = pesach;
+  if (notes       !== undefined) updates.notes       = notes;
   db.get('skus').find({ id: req.params.id }).assign(updates).write();
   res.json(db.get('skus').find({ id: req.params.id }).value());
 });
@@ -144,13 +150,24 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), async (req, res
     let added = 0, updated = 0;
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      const id   = row[0] ? String(row[0]).trim() : '';
-      const name = row[1] ? String(row[1]).trim() : '';
+      const id       = row[0] ? String(row[0]).trim() : '';
+      const name     = row[1] ? String(row[1]).trim() : '';
       const supplier = row[3] ? String(row[3]).trim() : '';
+      const tipusRaw = row[4] ? String(row[4]).trim() : '';
+      const tipus    = tipusRaw === 'P' ? 'יצור' : tipusRaw === 'R' ? 'רכש' : tipusRaw;
+      const responsible = row[5] ? String(row[5]).trim() : '';
+      const kashrus  = row[6] ? String(row[6]).trim() : '';
+      const pesach   = row[7] && row[7] !== '#N/A' ? String(row[7]).trim() : '';
       if (!id || !name || id === 'undefined') continue;
       const existing = db.get('skus').find({ id }).value();
-      if (existing) { db.get('skus').find({ id }).assign({ name, supplier }).write(); updated++; }
-      else { db.get('skus').push({ id, name, supplier }).write(); added++; }
+      const data = { id, name, supplier, tipus, responsible, kashrus, pesach };
+      if (existing) {
+        db.get('skus').find({ id }).assign(data).write();
+        updated++;
+      } else {
+        db.get('skus').push({ ...data, source: '', notes: '' }).write();
+        added++;
+      }
     }
     const fp = path.join(UPLOADS_DIR, req.file.filename);
     if (fs.existsSync(fp)) fs.unlinkSync(fp);
