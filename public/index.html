@@ -332,7 +332,14 @@ let fileTags=[];
 
 const DOCTYPE_OPTIONS=['בקשות','תעודות כשרות','דוחות יצור','אישורי רבנות','אחר'];
 
-function authHeaders(){return token?{'Authorization':'Bearer '+token}:{};}
+function authHeaders(){
+  if (token) return {'Authorization': 'Bearer ' + token};
+  if (sessionRole === 'assistant') {
+    const ac = sessionStorage.getItem('assistant_code_val') || '';
+    if (ac) return {'X-Assistant-Code': ac};
+  }
+  return {};
+}
 function decodeToken(t){try{return JSON.parse(atob(t.split('.')[1]));}catch{return null;}}
 
 function initAuth(){
@@ -1497,6 +1504,7 @@ async function submitCodeLogin() {
     if (data.ok && data.role === pendingLoginRole) {
       sessionRole = data.role;
       sessionStorage.setItem('session_role', data.role);
+      if (data.role === 'assistant') sessionStorage.setItem('assistant_code_val', document.getElementById('loginCodeInput').value.trim());
       closeMainLogin();
       updateSessionBadge();
       if (data.role === 'assistant') showAssistantUI();
