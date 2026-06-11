@@ -296,7 +296,6 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 <script>
 const API='';
 let token=localStorage.getItem('docrepo_token')||null;
-let sessionRole = null; // יאותחל מאוחר יותר
 function effectiveRole() {
   if (typeof currentUser !== 'undefined' && currentUser) return 'admin';
   return sessionRole || sessionStorage.getItem('session_role') || null;
