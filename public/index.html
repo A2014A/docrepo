@@ -220,8 +220,12 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
   <div class="modal" style="max-width:440px">
     <div class="modal-header">
       <div class="modal-title">עריכת מסמך</div>
-      <button class="modal-close" onclick="closeEdit()" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-outline" style="font-size:.8rem;padding:5px 12px" onclick="aiIdentifyEdit()" id="editAiBtn">🤖 זהה אוטומטית</button>
+        <button class="modal-close" onclick="closeEdit()" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
     </div>
+    <div id="editAiStatus" style="font-size:.78rem;color:var(--ink3);margin-bottom:6px;text-align:center"></div>
     <div id="editAlert"></div>
     <div class="form-group"><label class="form-label">שם המסמך</label><input type="text" class="form-input" id="editName"/></div>
     <div class="form-group">
@@ -1679,6 +1683,45 @@ function confirmSkuPicker() {
   }
   closeSkuPicker();
   showToast(`${chosen.length} מקטים נוספו`);
+}
+
+
+/* ══════════ AI IDENTIFY FOR EDIT ══════════ */
+async function aiIdentifyEdit() {
+  if (!editingDocId) return;
+  const btn = document.getElementById('editAiBtn');
+  const status = document.getElementById('editAiStatus');
+  btn.disabled = true;
+  btn.textContent = '⏳ מזהה...';
+  status.textContent = '';
+  try {
+    const r = await fetch(API + '/api/identify-by-id/' + editingDocId, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error);
+    // מלא שדות
+    if (data.name)        document.getElementById('editName').value = data.name;
+    if (data.doctype)     document.getElementById('editDocType').value = data.doctype;
+    if (data.description) document.getElementById('editDesc').value = data.description;
+    if (data.expiry_date) document.getElementById('editExpiry').value = data.expiry_date;
+    if (data.production_date) document.getElementById('editProd').value = data.production_date;
+    if (data.suggested_skus?.length) {
+      data.suggested_skus.forEach(s => {
+        if (!editSkus.find(x => x.id === s.id)) editSkus.push(s);
+      });
+      renderSkuPills('edit');
+    }
+    status.textContent = `✓ זוהה: ${data.doctype||''}${data.expiry_date ? ' | תוקף: '+data.expiry_date : ''}${data.suggested_skus?.length ? ' | '+data.suggested_skus.length+' מקטים' : ''}`;
+    status.style.color = '#059669';
+  } catch(e) {
+    status.textContent = '⚠ שגיאה: ' + e.message;
+    status.style.color = '#dc2626';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🤖 זהה אוטומטית';
+  }
 }
 
 </script>
