@@ -78,6 +78,24 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+/* middleware: מנהל או עוזר (JWT או קוד עוזר) */
+function requireAssistant(req, res, next) {
+  // בדוק JWT תקין
+  const header = req.headers.authorization || '';
+  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (token) {
+    try { req.user = jwt.verify(token, JWT_SECRET); return next(); } catch {}
+  }
+  // בדוק X-Assistant-Code header
+  const code = req.headers['x-assistant-code'] || '';
+  const ac = db.get('assistant_code').value();
+  if (code && code === ac) {
+    req.user = { username: 'assistant', role: 'assistant' };
+    return next();
+  }
+  return res.status(401).json({ error: 'לא מחובר' });
+}
+
 function fmtSize(bytes) {
   if (!bytes) return '—';
   return bytes > 1048576 ? (bytes/1048576).toFixed(1)+' MB' : Math.round(bytes/1024)+' KB';
@@ -277,7 +295,7 @@ app.get('/api/docs', (req, res) => {
 });
 
 /* ── POST single ── */
-app.post('/api/docs', requireAuth, upload.single('file'), (req, res) => {
+app.post('/api/docs', requireAssistant, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
   const { name, description, tags, doctype, hidden, skus, expiry_date, production_date } = req.body;
   const docName    = name || req.file.originalname.replace(/\.[^.]+$/,'');
@@ -330,7 +348,7 @@ app.post('/api/docs/multi', requireAuth, upload.array('files', 50), (req, res) =
 });
 
 /* ── PATCH ── */
-app.patch('/api/docs/:id', requireAuth, (req, res) => {
+app.patch('/api/docs/:id', requireAssistant, (req, res) => {
   const id  = parseInt(req.params.id);
   const doc = db.get('documents').find({ id }).value();
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
@@ -415,7 +433,7 @@ app.listen(PORT, () => {
 });
 
 /* ── AI IDENTIFY ── */
-app.post('/api/identify', requireAuth, upload.single('file'), async (req, res) => {
+app.post('/api/identify', requireAssistant, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY לא מוגדר' });
