@@ -175,7 +175,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       <button class="btn btn-accent" style="width:100%;padding:10px" onclick="openUpload()">+ העלאת מסמכים</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openSkuManager()">⚙ ניהול מקטים</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
-      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangeViewCode()">🔑 שינוי קוד צפייה</button>
+      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRoleCodes()">🔑 ניהול קודי גישה</button>
     </div>
   </aside>
   <section>
@@ -382,7 +382,7 @@ function iconInfo(ext){
 function fmtDate(s){return new Date(s).toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric'});}
 
 function renderCard(d,i){
-  const ic=iconInfo(d.ext);const isAdm=!!token;
+  const ic=iconInfo(d.ext);const isAdm=canUploadEdit();
   return `<article class="doc-card${d.hidden?' is-hidden':''}" style="animation-delay:${i*.04}s">
     <div class="doc-card-top">
       <div class="doc-type-icon ${ic.cls}">${ic.label}</div>
@@ -410,9 +410,10 @@ function renderCard(d,i){
       <button class="icon-btn" onclick="openEdit(${d.id})" title="עריכה">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
       </button>
-      <button class="icon-btn del" onclick="deleteDoc(${d.id})" title="מחיקה">
+      ${effectiveRole()==='admin'?`<button class="icon-btn del" onclick="deleteDoc(${d.id})" title="מחיקה">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
       </button>`:''}
+      `:''}
     </div>
   </article>`;
 }
@@ -777,6 +778,11 @@ function showToast(msg){
   clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2800);
 }
 
+// שחזר סשן עוזר/צופה מהדפדפן
+if (!token && sessionRole) {
+  updateSessionBadge();
+  if (sessionRole === 'assistant') showAssistantUI();
+}
 initAuth();loadStats();loadTags();loadDocs();
 </script>
 <!-- SKU MANAGER MODAL -->
@@ -1236,18 +1242,34 @@ function exportReportExcel() {
 }
 
 
-/* ══════════ VIEW CODE GUARD ══════════ */
-let viewCodeVerified = sessionStorage.getItem('view_code_ok') === '1';
-let pendingAction = null; // {type:'view'|'download', args}
+/* ══════════ ROLE-BASED ACCESS ══════════ */
+// role: null | 'viewer' | 'assistant' | 'admin'
+// currentUser נקבע ע"י initAuth() למנהל. לעוזר/צופה — sessionStorage
+let sessionRole = sessionStorage.getItem('session_role') || null; // 'viewer' | 'assistant'
+let pendingAction = null;
+
+function effectiveRole() {
+  if (currentUser) return 'admin';
+  return sessionRole;
+}
+
+function canViewDownload() {
+  return !!effectiveRole();
+}
+
+function canUploadEdit() {
+  const r = effectiveRole();
+  return r === 'admin' || r === 'assistant';
+}
 
 function guardedView(id, ext, name) {
-  if (viewCodeVerified) { openViewer(id, ext, name); return; }
+  if (canViewDownload()) { openViewer(id, ext, name); return; }
   pendingAction = { type: 'view', args: [id, ext, name] };
   openViewCodeModal();
 }
 
 function guardedDownload(id, name, ext) {
-  if (viewCodeVerified) { doDownload(id, name, ext); return; }
+  if (canViewDownload()) { doDownload(id, name, ext); return; }
   pendingAction = { type: 'download', args: [id, name, ext] };
   openViewCodeModal();
 }
@@ -1277,12 +1299,16 @@ async function submitViewCode() {
   const code = document.getElementById('viewCodeInput').value.trim();
   if (!code) return;
   try {
-    const data = await apiFetch('/api/view-code/check?code=' + encodeURIComponent(code));
+    const res = await fetch('/api/role-code/check?code=' + encodeURIComponent(code));
+    const data = await res.json();
     if (data.ok) {
-      viewCodeVerified = true;
-      sessionStorage.setItem('view_code_ok', '1');
+      sessionRole = data.role;
+      sessionStorage.setItem('session_role', data.role);
       document.getElementById('viewCodeModal').classList.remove('open');
-      // בצע את הפעולה שהמתינה
+      // הצג badge בהדר
+      updateSessionBadge();
+      // אם עוזר — הצג כפתורי ניהול
+      if (data.role === 'assistant') showAssistantUI();
       if (pendingAction) {
         const { type, args } = pendingAction;
         pendingAction = null;
@@ -1297,29 +1323,53 @@ async function submitViewCode() {
   }
 }
 
-/* ── ניהול קוד צפייה (מנהל) ── */
-function openChangeViewCode() {
-  document.getElementById('newViewCode').value = '';
-  document.getElementById('viewCodeChangeAlert').innerHTML = '';
-  document.getElementById('changeViewCodeModal').classList.add('open');
-}
-function closeChangeViewCode() {
-  document.getElementById('changeViewCodeModal').classList.remove('open');
-}
-async function submitChangeViewCode() {
-  const code = document.getElementById('newViewCode').value.trim();
-  if (!code || code.length < 2) {
-    document.getElementById('viewCodeChangeAlert').innerHTML = '<div class="alert alert-error">קוד קצר מדי (לפחות 2 תווים)</div>';
-    return;
+function updateSessionBadge() {
+  if (currentUser || !sessionRole) return;
+  const label = sessionRole === 'assistant' ? 'עוזר' : 'צופה';
+  const hdr = document.getElementById('headerActions');
+  if (!hdr.querySelector('.session-badge')) {
+    const badge = document.createElement('span');
+    badge.className = 'admin-badge session-badge';
+    badge.textContent = label;
+    hdr.prepend(badge);
   }
+}
+
+function showAssistantUI() {
+  // הצג כפתור העלאה בסיידבר
+  document.getElementById('adminUploadSection').style.display = 'block';
+  loadAll();
+}
+
+/* ── ניהול קודי תפקידים (מנהל) ── */
+function openRoleCodes() {
+  document.getElementById('rcAssistant').value = '';
+  document.getElementById('rcViewer').value = '';
+  document.getElementById('roleCodesAlert').innerHTML = '';
+  document.getElementById('roleCodesModal').classList.add('open');
+}
+function closeRoleCodes() {
+  document.getElementById('roleCodesModal').classList.remove('open');
+}
+async function submitRoleCodes() {
+  const ac = document.getElementById('rcAssistant').value.trim();
+  const vc = document.getElementById('rcViewer').value.trim();
+  if (!ac && !vc) { document.getElementById('roleCodesAlert').innerHTML = '<div class="alert alert-error">הזן לפחות קוד אחד</div>'; return; }
+  const body = {};
+  if (ac) body.assistant_code = ac;
+  if (vc) body.viewer_code = vc;
   try {
-    await apiFetch('/api/view-code', { method: 'PATCH', body: JSON.stringify({ code }) });
-    closeChangeViewCode();
-    showToast('קוד הצפייה עודכן בהצלחה');
+    await apiFetch('/api/role-codes', { method: 'PATCH', body: JSON.stringify(body) });
+    closeRoleCodes();
+    showToast('הקודים עודכנו בהצלחה');
   } catch(e) {
-    document.getElementById('viewCodeChangeAlert').innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+    document.getElementById('roleCodesAlert').innerHTML = `<div class="alert alert-error">${e.message}</div>`;
   }
 }
+
+/* ── legacy stubs (לא בשימוש) ── */
+function openChangeViewCode() { openRoleCodes(); }
+function closeChangeViewCode() { closeRoleCodes(); }
 
 </script>
 
@@ -1379,13 +1429,13 @@ async function submitChangeViewCode() {
   </div>
 </div>
 
-<!-- VIEW CODE MODAL -->
+<!-- ACCESS CODE MODAL (עוזר / צופה) -->
 <div class="modal-bg" id="viewCodeModal">
   <div class="modal" style="max-width:340px">
     <div class="modal-header">
       <div class="modal-title">קוד גישה</div>
     </div>
-    <p style="font-size:.88rem;color:var(--ink2);margin-bottom:1rem">הזן את קוד הגישה לצפייה והורדת מסמכים</p>
+    <p style="font-size:.88rem;color:var(--ink2);margin-bottom:1rem">הזן קוד גישה לצפייה והורדת מסמכים</p>
     <div id="viewCodeAlert"></div>
     <div class="form-group">
       <input type="password" class="form-input" id="viewCodeInput" placeholder="הזן קוד..." onkeydown="if(event.key==='Enter')submitViewCode()"/>
@@ -1397,6 +1447,30 @@ async function submitChangeViewCode() {
   </div>
 </div>
 
+
+<!-- MANAGE ROLE CODES MODAL (מנהל) -->
+<div class="modal-bg" id="roleCodesModal">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-header">
+      <div class="modal-title">ניהול קודי גישה</div>
+      <button class="modal-close" onclick="closeRoleCodes()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div id="roleCodesAlert"></div>
+    <div class="form-group">
+      <label class="form-label">קוד עוזר (העלאה + עריכה + צפייה)</label>
+      <input type="text" class="form-input" id="rcAssistant" placeholder="קוד עוזר..."/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">קוד צופה (צפייה והורדה בלבד)</label>
+      <input type="text" class="form-input" id="rcViewer" placeholder="קוד צופה..."/>
+    </div>
+    <p style="font-size:.78rem;color:var(--ink3);margin-bottom:.5rem">השאר ריק כדי לא לשנות</p>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeRoleCodes()">ביטול</button>
+      <button class="btn btn-accent" onclick="submitRoleCodes()">שמור קודים</button>
+    </div>
+  </div>
+</div>
 <!-- CHANGE VIEW CODE MODAL (מנהל) -->
 <div class="modal-bg" id="changeViewCodeModal">
   <div class="modal" style="max-width:340px">
