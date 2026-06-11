@@ -17,7 +17,7 @@ const DATA_DIR    = path.join(__dirname, 'data');
 [UPLOADS_DIR, DATA_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
 const db = low(new FileSync(path.join(DATA_DIR, 'db.json')));
-db.defaults({ users: [], documents: [], skus: [], nextDocId: 1, nextUserId: 1 }).write();
+db.defaults({ users: [], documents: [], skus: [], nextDocId: 1, nextUserId: 1, view_code: '1234' }).write();
 
 if (!db.get('users').find({ username: 'admin' }).value()) {
   const id = db.get('nextUserId').value();
@@ -333,6 +333,21 @@ app.delete('/api/docs/:id', requireAuth, (req, res) => {
 });
 
 /* ── DOWNLOAD ── */
+
+/* ── VIEW CODE ── */
+app.get('/api/view-code/check', (req, res) => {
+  const { code } = req.query;
+  const stored = db.get('view_code').value();
+  res.json({ ok: code === stored });
+});
+
+app.patch('/api/view-code', requireAuth, (req, res) => {
+  const { code } = req.body;
+  if (!code || code.length < 2) return res.status(400).json({ error: 'קוד קצר מדי' });
+  db.set('view_code', code).write();
+  res.json({ ok: true });
+});
+
 app.get('/api/docs/:id/download', (req, res) => {
   const doc = db.get('documents').find({ id: parseInt(req.params.id) }).value();
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
