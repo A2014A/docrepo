@@ -425,6 +425,72 @@ app.get('/api/docs/:id/download', (req, res) => {
   res.sendFile(fp);
 });
 
+
+/* ── IDENTIFY BY DOC ID ── */
+app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
+  const doc = db.get('documents').find({ id: parseInt(req.params.id) }).value();
+  if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
+  const fp = path.join(UPLOADS_DIR, doc.filename);
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'קובץ לא נמצא' });
+  // קרא קובץ
+  const fileData = fs.readFileSync(fp).toString('base64');
+  const ext = (doc.ext || '').toLowerCase();
+  // רק PDF ותמונות נתמכות
+  let mediaType = 'application/pdf';
+  if (['jpg','jpeg'].includes(ext)) mediaType = 'image/jpeg';
+  else if (ext === 'png') mediaType = 'image/png';
+  else if (!['pdf'].includes(ext)) return res.status(400).json({ error: 'סוג קובץ לא נתמך לזיהוי' });
+
+  try {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'מפתח API חסר' });
+    const skus = db.get('skus').value().slice(0, 800);
+    const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
+    const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
+
+קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
+{
+  "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
+  "name": "שם קצר ומתאר של המסמך בעברית",
+  "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
+  "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה) בפורמט YYYY-MM-DD. אם לא מופיע — null",
+  "description": "תיאור קצר של המסמך בעברית — כולל שם היצרן אם מופיע",
+  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
+}
+רשימת המקטים: ${skuList}
+ענה רק ב-JSON.`;
+
+    const contentBlock = ext === 'pdf'
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } }
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileData } };
+
+    const body = {
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: [contentBlock, { type: 'text', text: prompt }] }]
+    };
+    const headers = { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
+    if (ext === 'pdf') headers['anthropic-beta'] = 'pdfs-2024-09-25';
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || 'שגיאת API');
+
+    let result = {};
+    const text = data.content?.find(c => c.type === 'text')?.text || '';
+    const clean = text.replace(/```json|```/g, '').trim();
+    try { result = JSON.parse(clean); } catch { result = {}; }
+
+    result.suggested_skus = (result.suggested_skus || []).map(id => {
+      const sku = db.get('skus').find({ id: String(id) }).value();
+      return sku || { id: String(id), name: '', supplier: '' };
+    });
+    res.json({ ok: true, ...result });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
 
 app.listen(PORT, () => {
@@ -447,15 +513,17 @@ app.post('/api/identify', requireAssistant, upload.single('file'), async (req, r
     const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
     const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
 
-קרא את המסמך המצורף וענה בדיוק בפורמט JSON הבא בלבד:
+קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
 {
   "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
   "name": "שם קצר ומתאר של המסמך בעברית",
-  "expiry_date": "תאריך תוקף בפורמט YYYY-MM-DD אם מופיע, אחרת null",
-  "description": "תיאור קצר של המסמך בעברית",
+  "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
+  "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה / Manufactured) בפורמט YYYY-MM-DD. אם לא מופיע — null",
+  "description": "תיאור קצר של המסמך בעברית — כולל שם היצרן אם מופיע",
   "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
 }
 
+הנחיות: המר תאריכים מ-DD/MM/YYYY או MM/DD/YYYY לפורמט YYYY-MM-DD.
 רשימת המקטים האפשריים:
 ${skuList}
 
