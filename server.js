@@ -11,7 +11,7 @@ const FileSync = require('lowdb/adapters/FileSync');
 const PORT       = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'docrepo_secret_change_in_prod';
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
-const DATA_DIR    = path.join(__dirname, 'data');
+const DATA_DIR    = process.env.RENDER ? path.join(__dirname, 'uploads', '_data') : path.join(__dirname, 'data');
 
 [UPLOADS_DIR, DATA_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
