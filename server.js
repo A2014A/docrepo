@@ -317,7 +317,11 @@ app.get('/api/docs/:id/download', (req, res) => {
   if (doc.hidden && !isAdminReq(req)) return res.status(403).json({ error: 'אין גישה' });
   const fp = path.join(UPLOADS_DIR, doc.filename);
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'הקובץ לא נמצא' });
-  res.download(fp, doc.original_name);
+  const ext = doc.ext ? '.'+doc.ext : path.extname(doc.filename);
+  const safeName = doc.name ? doc.name + ext : doc.original_name;
+  const encoded = encodeURIComponent(safeName);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encoded}`);
+  res.sendFile(fp);
 });
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
