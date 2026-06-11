@@ -172,6 +172,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
     <div class="sidebar-section" id="adminUploadSection" style="display:none">
       <div class="sidebar-title">ניהול</div>
       <button class="btn btn-accent" style="width:100%;padding:10px" onclick="openUpload()">+ העלאת מסמכים</button>
+      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openSkuManager()">⚙ ניהול מקטים</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
     </div>
   </aside>
@@ -723,6 +724,197 @@ function showToast(msg){
 }
 
 initAuth();loadStats();loadTags();loadDocs();
+</script>
+<!-- SKU MANAGER MODAL -->
+<div class="modal-bg" id="skuModal">
+  <div class="modal" style="max-width:780px;width:95vw">
+    <div class="modal-header">
+      <div class="modal-title">ניהול מקטים</div>
+      <button class="modal-close" onclick="closeSkuManager()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <!-- טאבים -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border2);padding-bottom:8px">
+      <button class="btn btn-accent" id="skuTabList"   onclick="skuTab('list')">רשימת מקטים</button>
+      <button class="btn btn-outline" id="skuTabAdd"   onclick="skuTab('add')">+ הוספה ידנית</button>
+      <button class="btn btn-outline" id="skuTabImport" onclick="skuTab('import')">📥 ייבוא מ-Excel</button>
+      <button class="btn btn-outline" id="skuTabReport" onclick="skuTab('report')">📊 דוח מסמכים</button>
+    </div>
+
+    <!-- רשימה -->
+    <div id="skuPaneList">
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input type="text" class="form-input" id="skuListSearch" placeholder="חפש מקט..." oninput="loadSkuList()" style="flex:1"/>
+      </div>
+      <div id="skuListAlert"></div>
+      <div style="max-height:420px;overflow-y:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:.85rem" id="skuTable">
+          <thead><tr style="background:var(--bg2);position:sticky;top:0">
+            <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border2)">מקט</th>
+            <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border2)">שם מוצר</th>
+            <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border2)">ספק</th>
+            <th style="padding:8px;text-align:center;border-bottom:1px solid var(--border2)">פעולות</th>
+          </tr></thead>
+          <tbody id="skuTableBody"></tbody>
+        </table>
+      </div>
+      <div id="skuListCount" style="margin-top:8px;font-size:.8rem;color:var(--ink3)"></div>
+    </div>
+
+    <!-- הוספה ידנית -->
+    <div id="skuPaneAdd" style="display:none">
+      <div id="skuAddAlert"></div>
+      <div class="form-group"><label class="form-label">מספר מקט</label><input type="text" class="form-input" id="skuAddId" placeholder="לדוגמה: 12345"/></div>
+      <div class="form-group"><label class="form-label">שם מוצר</label><input type="text" class="form-input" id="skuAddName" placeholder="שם המוצר..."/></div>
+      <div class="form-group"><label class="form-label">ספק</label><input type="text" class="form-input" id="skuAddSupplier" placeholder="שם הספק..."/></div>
+      <button class="btn btn-accent" onclick="addSkuManual()">הוסף מקט</button>
+    </div>
+
+    <!-- ייבוא Excel -->
+    <div id="skuPaneImport" style="display:none">
+      <div id="skuImportAlert"></div>
+      <p style="font-size:.9rem;color:var(--ink2);margin-bottom:16px">העלה קובץ Excel עם עמודות: מקט, תיאור מוצר, ספק, שם ספק.<br/>מקטים קיימים יתעדכנו, חדשים יתווספו.</p>
+      <input type="file" id="skuImportFile" accept=".xlsx,.xls" class="form-input" style="margin-bottom:12px"/>
+      <button class="btn btn-accent" onclick="importSkuFile()">ייבא קובץ</button>
+    </div>
+
+    <!-- דוח -->
+    <div id="skuPaneReport" style="display:none">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+        <button class="btn btn-outline" id="rptAll"     onclick="filterReport('all')"     style="font-size:.8rem">הכל</button>
+        <button class="btn btn-outline" id="rptMissing" onclick="filterReport('missing')" style="font-size:.8rem">⚠ חסר מסמך</button>
+        <button class="btn btn-outline" id="rptHas"     onclick="filterReport('has')"     style="font-size:.8rem">✓ יש מסמך</button>
+        <input type="text" class="form-input" id="rptSearch" placeholder="חפש..." oninput="renderReport()" style="flex:1;font-size:.8rem"/>
+      </div>
+      <div style="max-height:400px;overflow-y:auto" id="reportTable"></div>
+      <div id="reportSummary" style="margin-top:8px;font-size:.8rem;color:var(--ink3)"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ══════════ SKU MANAGER ══════════ */
+let skuManagerData=[], reportData=[], reportFilter='all';
+
+function openSkuManager(){document.getElementById('skuModal').classList.add('open');skuTab('list');}
+function closeSkuManager(){document.getElementById('skuModal').classList.remove('open');}
+
+function skuTab(t){
+  ['list','add','import','report'].forEach(x=>{
+    document.getElementById('skuPane'+x.charAt(0).toUpperCase()+x.slice(1)).style.display=x===t?'':'none';
+    document.getElementById('skuTab'+x.charAt(0).toUpperCase()+x.slice(1)).className='btn '+(x===t?'btn-accent':'btn-outline');
+  });
+  if(t==='list')loadSkuList();
+  if(t==='report')loadReport();
+}
+
+async function loadSkuList(){
+  const q=document.getElementById('skuListSearch').value.trim();
+  const skus=await apiFetch('/api/skus?all=1'+(q?'&q='+encodeURIComponent(q):''));
+  skuManagerData=skus;
+  document.getElementById('skuTableBody').innerHTML=skus.map(s=>`
+    <tr style="border-bottom:1px solid var(--border1)" id="skurow_${s.id}">
+      <td style="padding:7px 8px;font-weight:600;color:var(--accent2)">${s.id}</td>
+      <td style="padding:7px 8px" id="skuname_${s.id}">${s.name}</td>
+      <td style="padding:7px 8px;color:var(--ink3)" id="skusup_${s.id}">${s.supplier||''}</td>
+      <td style="padding:7px 8px;text-align:center;white-space:nowrap">
+        <button class="icon-btn" onclick="startEditSku('${s.id}')" title="עריכה">✏️</button>
+        <button class="icon-btn" onclick="deleteSku('${s.id}')" title="מחיקה" style="color:#dc2626">🗑</button>
+      </td>
+    </tr>`).join('');
+  document.getElementById('skuListCount').textContent=`סה"כ: ${skus.length} מקטים`;
+}
+
+function startEditSku(id){
+  const s=skuManagerData.find(x=>x.id===id);if(!s)return;
+  document.getElementById('skuname_'+id).innerHTML=`<input class="form-input" style="padding:3px 6px;font-size:.85rem" id="editname_${id}" value="${s.name}"/>`;
+  document.getElementById('skusup_'+id).innerHTML=`<input class="form-input" style="padding:3px 6px;font-size:.85rem" id="editsup_${id}" value="${s.supplier||''}"/>`;
+  document.getElementById('skurow_'+id).querySelector('.icon-btn').outerHTML=`<button class="btn btn-accent" style="font-size:.75rem;padding:3px 8px" onclick="saveEditSku('${id}')">שמור</button>`;
+}
+
+async function saveEditSku(id){
+  const name=document.getElementById('editname_'+id)?.value.trim();
+  const supplier=document.getElementById('editsup_'+id)?.value.trim();
+  if(!name)return;
+  await apiFetch('/api/skus/'+id,{method:'PATCH',body:JSON.stringify({name,supplier})});
+  showToast('המקט עודכן');loadSkuList();
+}
+
+async function deleteSku(id){
+  if(!confirm('למחוק מקט '+id+'?'))return;
+  await apiFetch('/api/skus/'+id,{method:'DELETE'});
+  showToast('המקט נמחק');loadSkuList();
+}
+
+async function addSkuManual(){
+  const id=document.getElementById('skuAddId').value.trim();
+  const name=document.getElementById('skuAddName').value.trim();
+  const supplier=document.getElementById('skuAddSupplier').value.trim();
+  if(!id||!name){document.getElementById('skuAddAlert').innerHTML='<div class="alert alert-error">נא למלא מקט ושם</div>';return;}
+  try{
+    await apiFetch('/api/skus',{method:'POST',body:JSON.stringify({id,name,supplier})});
+    document.getElementById('skuAddId').value='';
+    document.getElementById('skuAddName').value='';
+    document.getElementById('skuAddSupplier').value='';
+    document.getElementById('skuAddAlert').innerHTML='<div class="alert alert-success">המקט נוסף בהצלחה!</div>';
+    setTimeout(()=>document.getElementById('skuAddAlert').innerHTML='',3000);
+  }catch(e){document.getElementById('skuAddAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
+}
+
+async function importSkuFile(){
+  const file=document.getElementById('skuImportFile').files[0];
+  if(!file){document.getElementById('skuImportAlert').innerHTML='<div class="alert alert-error">נא לבחור קובץ</div>';return;}
+  const fd=new FormData();fd.append('file',file);
+  try{
+    document.getElementById('skuImportAlert').innerHTML='<div class="alert">מייבא...</div>';
+    const r=await fetch(API+'/api/skus/import',{method:'POST',headers:authHeaders(),body:fd});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.error);
+    document.getElementById('skuImportAlert').innerHTML=`<div class="alert alert-success">יובאו בהצלחה! נוספו: ${data.added} | עודכנו: ${data.updated} | סה"כ: ${data.total}</div>`;
+  }catch(e){document.getElementById('skuImportAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
+}
+
+async function loadReport(){
+  document.getElementById('reportTable').innerHTML='<div class="loading"><div class="spinner"></div>טוען...</div>';
+  reportData=await apiFetch('/api/skus/report');
+  renderReport();
+}
+
+function filterReport(f){
+  reportFilter=f;
+  ['all','missing','has'].forEach(x=>document.getElementById('rpt'+x.charAt(0).toUpperCase()+x.slice(1)).className='btn '+(x===f?'btn-accent':'btn-outline'));
+  renderReport();
+}
+
+function renderReport(){
+  const q=(document.getElementById('rptSearch')?.value||'').toLowerCase();
+  let data=reportData;
+  if(reportFilter==='missing')data=data.filter(s=>s.doc_count===0);
+  if(reportFilter==='has')data=data.filter(s=>s.doc_count>0);
+  if(q)data=data.filter(s=>s.id.includes(q)||s.name.toLowerCase().includes(q)||(s.supplier||'').toLowerCase().includes(q));
+  const missing=data.filter(s=>s.doc_count===0).length;
+  document.getElementById('reportSummary').textContent=`מוצג: ${data.length} | יש מסמך: ${data.filter(s=>s.doc_count>0).length} | חסר: ${missing}`;
+  document.getElementById('reportTable').innerHTML=`
+    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <thead><tr style="background:var(--bg2);position:sticky;top:0">
+        <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">מקט</th>
+        <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">שם מוצר</th>
+        <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">ספק</th>
+        <th style="padding:7px 8px;text-align:center;border-bottom:1px solid var(--border2)">מסמכים</th>
+      </tr></thead>
+      <tbody>${data.map(s=>`
+        <tr style="border-bottom:1px solid var(--border1);background:${s.doc_count===0?'#fff7f7':''}">
+          <td style="padding:6px 8px;font-weight:600;color:var(--accent2)">${s.id}</td>
+          <td style="padding:6px 8px">${s.name}</td>
+          <td style="padding:6px 8px;color:var(--ink3)">${s.supplier||''}</td>
+          <td style="padding:6px 8px;text-align:center">
+            ${s.doc_count===0
+              ? '<span style="color:#dc2626;font-weight:600">⚠ חסר</span>'
+              : `<span style="color:#059669;font-weight:600">✓ ${s.doc_count}</span>`}
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
 </script>
 </body>
 </html>

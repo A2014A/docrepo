@@ -93,7 +93,7 @@ app.patch('/api/auth/password', requireAuth, (req, res) => {
 
 /* ── SKUS ── */
 app.get('/api/skus', (req, res) => {
-  const { q } = req.query;
+  const { q, all } = req.query;
   let skus = db.get('skus').value();
   if (q) {
     const lq = q.toLowerCase();
@@ -103,7 +103,71 @@ app.get('/api/skus', (req, res) => {
       (s.supplier||'').toLowerCase().includes(lq)
     );
   }
-  res.json(skus.slice(0, 50));
+  res.json(all ? skus : skus.slice(0, 50));
+});
+
+app.post('/api/skus', requireAuth, (req, res) => {
+  const { id, name, supplier } = req.body;
+  if (!id || !name) return res.status(400).json({ error: 'חסרים מספר ושם' });
+  if (db.get('skus').find({ id: String(id) }).value())
+    return res.status(400).json({ error: 'מקט כבר קיים' });
+  const sku = { id: String(id), name, supplier: supplier||'' };
+  db.get('skus').push(sku).write();
+  res.status(201).json(sku);
+});
+
+app.patch('/api/skus/:id', requireAuth, (req, res) => {
+  const sku = db.get('skus').find({ id: req.params.id }).value();
+  if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
+  const { name, supplier } = req.body;
+  const updates = {};
+  if (name     !== undefined) updates.name     = name;
+  if (supplier !== undefined) updates.supplier = supplier;
+  db.get('skus').find({ id: req.params.id }).assign(updates).write();
+  res.json(db.get('skus').find({ id: req.params.id }).value());
+});
+
+app.delete('/api/skus/:id', requireAuth, (req, res) => {
+  if (!db.get('skus').find({ id: req.params.id }).value())
+    return res.status(404).json({ error: 'מקט לא נמצא' });
+  db.get('skus').remove({ id: req.params.id }).write();
+  res.json({ ok: true });
+});
+
+app.post('/api/skus/import', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  try {
+    const XLSX = require('xlsx');
+    const wb = XLSX.readFile(req.file.path);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+    let added = 0, updated = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      const id   = row[0] ? String(row[0]).trim() : '';
+      const name = row[1] ? String(row[1]).trim() : '';
+      const supplier = row[3] ? String(row[3]).trim() : '';
+      if (!id || !name || id === 'undefined') continue;
+      const existing = db.get('skus').find({ id }).value();
+      if (existing) { db.get('skus').find({ id }).assign({ name, supplier }).write(); updated++; }
+      else { db.get('skus').push({ id, name, supplier }).write(); added++; }
+    }
+    const fp = path.join(UPLOADS_DIR, req.file.filename);
+    if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    res.json({ ok: true, added, updated, total: db.get('skus').value().length });
+  } catch(e) {
+    res.status(500).json({ error: 'שגיאה בקריאת הקובץ: ' + e.message });
+  }
+});
+
+app.get('/api/skus/report', requireAuth, (req, res) => {
+  const skus = db.get('skus').value();
+  const docs = db.get('documents').value();
+  const report = skus.map(s => {
+    const linked = docs.filter(d => (d.skus||[]).some(ds => ds.id === s.id));
+    return { ...s, doc_count: linked.length, docs: linked.map(d => ({ id: d.id, name: d.name, doctype: d.doctype, expiry_date: d.expiry_date||'' })) };
+  });
+  res.json(report);
 });
 
 /* ── STATS ── */
