@@ -17,6 +17,10 @@ const DATA_DIR    = path.join(__dirname, 'data');
 
 const db = low(new FileSync(path.join(DATA_DIR, 'db.json')));
 db.defaults({ users: [], documents: [], skus: [], nextDocId: 1, nextUserId: 1, view_code: '1234', assistant_code: '5678', viewer_code: '0000' }).write();
+// וודא שדות קודים קיימים ב-db ישן
+if (!db.get('assistant_code').value()) db.set('assistant_code', '5678').write();
+if (!db.get('viewer_code').value())    db.set('viewer_code',    '0000').write();
+if (!db.get('view_code').value())      db.set('view_code',      '1234').write();
 
 if (!db.get('users').find({ username: 'admin' }).value()) {
   const id = db.get('nextUserId').value();
