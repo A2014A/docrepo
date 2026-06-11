@@ -205,7 +205,16 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       <p>לחץ לבחירת קבצים או גרור לכאן</p>
       <small>ניתן לבחור מספר קבצים — עד 50MB לקובץ</small>
     </div>
-    <input type="file" id="fileInput" style="display:none" onchange="onFilesChosen(this)" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.txt" multiple/>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <button type="button" class="btn btn-outline" style="flex:1" onclick="document.getElementById('fileInput').click()">
+        📄 בחר קבצים (PDF, Word, Excel...)
+      </button>
+      <button type="button" class="btn btn-outline" style="flex:1" onclick="document.getElementById('fileInputImg').click()">
+        🖼 בחר תמונות
+      </button>
+    </div>
+    <input type="file" id="fileInput" style="display:none" onchange="onFilesChosen(this)" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" multiple/>
+    <input type="file" id="fileInputImg" style="display:none" onchange="onFilesChosen(this)" accept="image/*" multiple/>
     <!-- טפסים דינמיים לכל קובץ -->
     <div class="file-forms" id="fileForms"></div>
     <div class="modal-footer">
@@ -462,6 +471,7 @@ function closeUpload(){
   document.getElementById('uploadModal').classList.remove('open');
   document.getElementById('uploadAlert').innerHTML='';
   document.getElementById('fileInput').value='';
+  document.getElementById('fileInputImg').value='';
   document.getElementById('fileForms').innerHTML='';
   chosenFiles=[];fileTags=[];fileSkus={};
   const btn=document.getElementById('uploadSubmitBtn');
