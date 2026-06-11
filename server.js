@@ -185,7 +185,7 @@ app.get('/api/skus/report', requireAuth, (req, res) => {
   const docs = db.get('documents').value();
   const report = skus.map(s => {
     const linked = docs.filter(d => (d.skus||[]).some(ds => ds.id === s.id));
-    return { ...s, doc_count: linked.length, docs: linked.map(d => ({ id: d.id, name: d.name, doctype: d.doctype, expiry_date: d.expiry_date||'' })) };
+    return { ...s, doc_count: linked.length, docs: linked.map(d => ({ id: d.id, name: d.name, doctype: d.doctype||'', expiry_date: d.expiry_date||'', production_date: d.production_date||'', size_label: d.size_label||'', ext: d.ext||'' })) };
   });
   res.json(report);
 });
@@ -252,7 +252,7 @@ app.get('/api/docs', (req, res) => {
 /* ── POST single ── */
 app.post('/api/docs', requireAuth, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
-  const { name, description, tags, doctype, hidden, skus, expiry_date } = req.body;
+  const { name, description, tags, doctype, hidden, skus, expiry_date, production_date } = req.body;
   const docName    = name || req.file.originalname.replace(/\.[^.]+$/,'');
   const ext        = path.extname(req.file.originalname).replace('.','').toLowerCase();
   const parsedTags = tags ? JSON.parse(tags).map(t=>t.trim()).filter(Boolean) : ['כללי'];
@@ -266,6 +266,7 @@ app.post('/api/docs', requireAuth, upload.single('file'), (req, res) => {
     doctype: doctype || '',
     skus: parsedSkus,
     expiry_date: expiry_date || '',
+    production_date: production_date || '',
     hidden: hidden === 'true',
     uploader: req.user.username,
     created_at: new Date().toISOString()
@@ -306,7 +307,7 @@ app.patch('/api/docs/:id', requireAuth, (req, res) => {
   const id  = parseInt(req.params.id);
   const doc = db.get('documents').find({ id }).value();
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
-  const { name, description, tags, doctype, hidden, skus, expiry_date } = req.body;
+  const { name, description, tags, doctype, hidden, skus, expiry_date, production_date } = req.body;
   const updates = {};
   if (name        !== undefined) updates.name        = name;
   if (description !== undefined) updates.description = description;
@@ -314,7 +315,8 @@ app.patch('/api/docs/:id', requireAuth, (req, res) => {
   if (doctype     !== undefined) updates.doctype     = doctype;
   if (hidden      !== undefined) updates.hidden      = hidden;
   if (skus        !== undefined) updates.skus        = skus;
-  if (expiry_date !== undefined) updates.expiry_date = expiry_date;
+  if (expiry_date       !== undefined) updates.expiry_date       = expiry_date;
+  if (production_date   !== undefined) updates.production_date   = production_date;
   db.get('documents').find({ id }).assign(updates).write();
   res.json(docOut(db.get('documents').find({ id }).value()));
 });
