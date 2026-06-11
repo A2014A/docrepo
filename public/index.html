@@ -143,8 +143,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
     מאגר מסמכים
   </div>
   <div class="header-actions" id="headerActions">
-    <button class="btn btn-ghost" onclick="openGuestLogin()">כניסה</button>
-    <button class="btn btn-ghost" onclick="openLogin()">כניסת מנהל</button>
+    <button class="btn btn-ghost" onclick="openMainLogin()">כניסה</button>
   </div>
 </header>
 
@@ -778,7 +777,7 @@ async function doLogin(){
 }
 function logout(){
   token=null;currentUser=null;localStorage.removeItem('docrepo_token');
-  document.getElementById('headerActions').innerHTML=`<button class="btn btn-ghost" onclick="openGuestLogin()">כניסה</button><button class="btn btn-ghost" onclick="openLogin()">כניסת מנהל</button>`;
+  document.getElementById('headerActions').innerHTML=`<button class="btn btn-ghost" onclick="openMainLogin()">כניסה</button>`;
   document.getElementById('adminUploadSection').style.display='none';
   loadAll();showToast('התנתקת בהצלחה');
 }
@@ -1465,6 +1464,68 @@ async function submitGuestLogin() {
   }
 }
 
+
+/* ══════════ MAIN LOGIN MODAL ══════════ */
+let pendingLoginRole = null;
+
+function openMainLogin() {
+  backToRoleSelect();
+  document.getElementById('mainLoginModal').classList.add('open');
+}
+function closeMainLogin() {
+  document.getElementById('mainLoginModal').classList.remove('open');
+}
+function backToRoleSelect() {
+  document.getElementById('loginRoleSelect').style.display = 'block';
+  document.getElementById('loginFormAdmin').style.display = 'none';
+  document.getElementById('loginFormCode').style.display = 'none';
+  document.getElementById('loginAlert').innerHTML = '';
+  document.getElementById('loginCodeAlert').innerHTML = '';
+  pendingLoginRole = null;
+}
+function showLoginForm(role) {
+  pendingLoginRole = role;
+  document.getElementById('loginRoleSelect').style.display = 'none';
+  if (role === 'admin') {
+    document.getElementById('loginFormAdmin').style.display = 'block';
+    document.getElementById('loginFormCode').style.display = 'none';
+    setTimeout(() => document.getElementById('loginUser').focus(), 100);
+  } else {
+    document.getElementById('loginFormAdmin').style.display = 'none';
+    document.getElementById('loginFormCode').style.display = 'block';
+    document.getElementById('loginCodeLabel').textContent =
+      role === 'assistant' ? 'הזן קוד אחים כהן:' : 'הזן קוד אורח:';
+    document.getElementById('loginCodeInput').value = '';
+    setTimeout(() => document.getElementById('loginCodeInput').focus(), 100);
+  }
+}
+async function submitCodeLogin() {
+  const code = document.getElementById('loginCodeInput').value.trim();
+  if (!code) return;
+  try {
+    const res = await fetch('/api/role-code/check?code=' + encodeURIComponent(code));
+    const data = await res.json();
+    if (data.ok && data.role === pendingLoginRole) {
+      sessionRole = data.role;
+      sessionStorage.setItem('session_role', data.role);
+      closeMainLogin();
+      updateSessionBadge();
+      if (data.role === 'assistant') showAssistantUI();
+      loadDocs();
+      showToast(data.role === 'assistant' ? 'ברוך הבא, אחים כהן!' : 'נכנסת כאורח');
+    } else {
+      document.getElementById('loginCodeAlert').innerHTML = '<div class="alert alert-error">קוד שגוי</div>';
+    }
+  } catch(e) {
+    document.getElementById('loginCodeAlert').innerHTML = '<div class="alert alert-error">שגיאה</div>';
+  }
+}
+
+/* stub — מחליף openLogin הישן */
+function openLogin()  { openMainLogin(); showLoginForm('admin'); }
+function closeLogin() { closeMainLogin(); }
+function openGuestLogin() { openMainLogin(); }
+
 </script>
 
 <!-- SKU DOCS MODAL -->
@@ -1600,6 +1661,63 @@ async function submitGuestLogin() {
       <button class="btn btn-outline" onclick="closeGuestLogin()">ביטול</button>
       <button class="btn btn-accent" onclick="submitGuestLogin()">כניסה</button>
     </div>
+  </div>
+</div>
+
+<!-- MAIN LOGIN MODAL -->
+<div class="modal-bg" id="mainLoginModal">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <div class="modal-title">כניסה למערכת</div>
+      <button class="modal-close" onclick="closeMainLogin()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <!-- בחירת רמה -->
+    <div id="loginRoleSelect" style="display:block">
+      <p style="font-size:.88rem;color:var(--ink2);margin-bottom:1.25rem">בחר סוג כניסה:</p>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn btn-accent" style="padding:14px;font-size:.95rem;text-align:right;justify-content:flex-start;gap:10px" onclick="showLoginForm('admin')">
+          👑 מנהל
+        </button>
+        <button class="btn btn-outline" style="padding:14px;font-size:.95rem;text-align:right;justify-content:flex-start;gap:10px" onclick="showLoginForm('assistant')">
+          🏢 אחים כהן
+        </button>
+        <button class="btn btn-outline" style="padding:14px;font-size:.95rem;text-align:right;justify-content:flex-start;gap:10px" onclick="showLoginForm('viewer')">
+          👁 אורח
+        </button>
+      </div>
+    </div>
+
+    <!-- טופס מנהל -->
+    <div id="loginFormAdmin" style="display:none">
+      <button onclick="backToRoleSelect()" style="background:none;border:none;cursor:pointer;color:var(--ink3);font-size:.85rem;margin-bottom:1rem;display:flex;align-items:center;gap:4px">
+        ← חזור
+      </button>
+      <div id="loginAlert"></div>
+      <div class="form-group">
+        <label class="form-label">שם משתמש</label>
+        <input type="text" class="form-input" id="loginUser" placeholder="שם משתמש" onkeydown="if(event.key==='Enter')doLogin()"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">סיסמה</label>
+        <input type="password" class="form-input" id="loginPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"/>
+      </div>
+      <button class="btn btn-accent" style="width:100%" onclick="doLogin()">כניסה</button>
+    </div>
+
+    <!-- טופס עוזר/אורח -->
+    <div id="loginFormCode" style="display:none">
+      <button onclick="backToRoleSelect()" style="background:none;border:none;cursor:pointer;color:var(--ink3);font-size:.85rem;margin-bottom:1rem;display:flex;align-items:center;gap:4px">
+        ← חזור
+      </button>
+      <p id="loginCodeLabel" style="font-size:.88rem;color:var(--ink2);margin-bottom:1rem"></p>
+      <div id="loginCodeAlert"></div>
+      <div class="form-group">
+        <input type="password" class="form-input" id="loginCodeInput" placeholder="הזן קוד..." onkeydown="if(event.key==='Enter')submitCodeLogin()"/>
+      </div>
+      <button class="btn btn-accent" style="width:100%" onclick="submitCodeLogin()">כניסה</button>
+    </div>
+
   </div>
 </div>
 </body>
