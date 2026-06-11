@@ -143,6 +143,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
     מאגר מסמכים
   </div>
   <div class="header-actions" id="headerActions">
+    <button class="btn btn-ghost" onclick="openGuestLogin()">כניסה</button>
     <button class="btn btn-ghost" onclick="openLogin()">כניסת מנהל</button>
   </div>
 </header>
@@ -337,7 +338,7 @@ function initAuth(){
   currentUser=p;showAdminUI();
 }
 function showAdminUI(){
-  document.getElementById('headerActions').innerHTML=`<span class="admin-badge">מנהל: ${currentUser.username}</span><button class="btn btn-ghost" onclick="logout()">יציאה</button>`;
+  document.getElementById('headerActions').innerHTML=`<span class="admin-badge">אחים כהן</span><button class="btn btn-ghost" onclick="logout()">יציאה</button>`;
   document.getElementById('adminUploadSection').style.display='block';
   loadAll();
 }
@@ -760,7 +761,7 @@ async function doLogin(){
 }
 function logout(){
   token=null;currentUser=null;localStorage.removeItem('docrepo_token');
-  document.getElementById('headerActions').innerHTML=`<button class="btn btn-ghost" onclick="openLogin()">כניסת מנהל</button>`;
+  document.getElementById('headerActions').innerHTML=`<button class="btn btn-ghost" onclick="openGuestLogin()">כניסה</button><button class="btn btn-ghost" onclick="openLogin()">כניסת מנהל</button>`;
   document.getElementById('adminUploadSection').style.display='none';
   loadAll();showToast('התנתקת בהצלחה');
 }
@@ -1337,7 +1338,7 @@ async function submitViewCode() {
 
 function updateSessionBadge() {
   if (currentUser || !sessionRole) return;
-  const label = sessionRole === 'assistant' ? 'עוזר' : 'צופה';
+  const label = sessionRole === 'assistant' ? 'אחים כהן' : 'צופה';
   const hdr = document.getElementById('headerActions');
   if (!hdr.querySelector('.session-badge')) {
     const badge = document.createElement('span');
@@ -1382,6 +1383,39 @@ async function submitRoleCodes() {
 /* ── legacy stubs (לא בשימוש) ── */
 function openChangeViewCode() { openRoleCodes(); }
 function closeChangeViewCode() { closeRoleCodes(); }
+
+
+/* ══════════ GUEST LOGIN ══════════ */
+function openGuestLogin() {
+  document.getElementById('guestCodeInput').value = '';
+  document.getElementById('guestLoginAlert').innerHTML = '';
+  document.getElementById('guestLoginModal').classList.add('open');
+  setTimeout(() => document.getElementById('guestCodeInput').focus(), 100);
+}
+function closeGuestLogin() {
+  document.getElementById('guestLoginModal').classList.remove('open');
+}
+async function submitGuestLogin() {
+  const code = document.getElementById('guestCodeInput').value.trim();
+  if (!code) return;
+  try {
+    const res = await fetch('/api/role-code/check?code=' + encodeURIComponent(code));
+    const data = await res.json();
+    if (data.ok) {
+      sessionRole = data.role;
+      sessionStorage.setItem('session_role', data.role);
+      closeGuestLogin();
+      updateSessionBadge();
+      if (data.role === 'assistant') showAssistantUI();
+      loadDocs();
+      showToast(data.role === 'assistant' ? 'ברוך הבא, אחים כהן!' : 'נכנסת בהצלחה');
+    } else {
+      document.getElementById('guestLoginAlert').innerHTML = '<div class="alert alert-error">קוד שגוי</div>';
+    }
+  } catch(e) {
+    document.getElementById('guestLoginAlert').innerHTML = '<div class="alert alert-error">שגיאה</div>';
+  }
+}
 
 </script>
 
@@ -1498,6 +1532,25 @@ function closeChangeViewCode() { closeRoleCodes(); }
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeChangeViewCode()">ביטול</button>
       <button class="btn btn-accent" onclick="submitChangeViewCode()">שמור קוד</button>
+    </div>
+  </div>
+</div>
+
+<!-- GUEST LOGIN MODAL -->
+<div class="modal-bg" id="guestLoginModal">
+  <div class="modal" style="max-width:340px">
+    <div class="modal-header">
+      <div class="modal-title">כניסה למערכת</div>
+      <button class="modal-close" onclick="closeGuestLogin()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <p style="font-size:.88rem;color:var(--ink2);margin-bottom:1rem">הזן קוד גישה</p>
+    <div id="guestLoginAlert"></div>
+    <div class="form-group">
+      <input type="password" class="form-input" id="guestCodeInput" placeholder="קוד גישה..." onkeydown="if(event.key==='Enter')submitGuestLogin()"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeGuestLogin()">ביטול</button>
+      <button class="btn btn-accent" onclick="submitGuestLogin()">כניסה</button>
     </div>
   </div>
 </div>
