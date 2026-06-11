@@ -479,7 +479,8 @@ function onFilesChosen(inp){
         <div class="file-form-filename">${f.name}</div>
         <div class="file-form-size">${size}</div>
       </div>
-      <div style="padding:4px 0 8px 0">
+      <div style="padding:4px 0 8px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-outline" style="font-size:.8rem;padding:5px 12px" onclick="previewLocalFile(${i})">👁 צפה בקובץ</button>
         <button class="btn btn-outline" style="font-size:.8rem;padding:5px 12px" onclick="aiIdentify(${i})">🤖 זהה אוטומטית</button>
         <span id="faiStatus_${i}" style="font-size:.78rem;color:var(--ink3);margin-right:8px"></span>
       </div>
@@ -1513,6 +1514,39 @@ async function submitCodeLogin() {
 function openLogin()  { openMainLogin(); showLoginForm('admin'); }
 function closeLogin() { closeMainLogin(); }
 function openGuestLogin() { openMainLogin(); }
+
+
+/* ══════════ LOCAL FILE PREVIEW ══════════ */
+function previewLocalFile(i) {
+  const file = chosenFiles[i];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  const url = URL.createObjectURL(file);
+  const body = document.getElementById('viewerBody');
+  const title = document.getElementById('viewerTitle');
+  const dlBtn = document.getElementById('viewerDownload');
+
+  title.textContent = file.name;
+  dlBtn.href = url;
+  dlBtn.download = file.name;
+
+  if (ext === 'pdf') {
+    body.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none"></iframe>`;
+  } else if (['jpg','jpeg','png','gif','webp'].includes(ext)) {
+    body.innerHTML = `<img src="${url}" style="max-width:100%;max-height:100%;object-fit:contain;padding:1rem" alt="${file.name}"/>`;
+  } else if (['doc','docx','xls','xlsx','ppt','pptx'].includes(ext)) {
+    // Office — לא ניתן בלוקאל, פתח בטאב חדש
+    body.innerHTML = `<div style="text-align:center;padding:3rem;color:var(--ink2)">
+      <p style="margin-bottom:1rem;font-size:.95rem">לא ניתן לצפות בקובץ Office ישירות.</p>
+      <a href="${url}" download="${file.name}" class="btn btn-accent">הורד לצפייה</a>
+    </div>`;
+  } else {
+    body.innerHTML = `<div style="text-align:center;padding:3rem;color:var(--ink3)">
+      <p>לא ניתן להציג קובץ מסוג זה</p>
+    </div>`;
+  }
+  document.getElementById('viewerModal').classList.add('open');
+}
 
 </script>
 
