@@ -402,7 +402,8 @@ app.get('/api/docs/:id/download', (req, res) => {
   const ext = doc.ext ? '.'+doc.ext : path.extname(doc.filename);
   const safeName = doc.name ? doc.name + ext : doc.original_name;
   const encoded = encodeURIComponent(safeName);
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encoded}`);
+  const inline = req.query.inline === '1';
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encoded}`);
   res.sendFile(fp);
 });
 
