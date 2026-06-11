@@ -83,6 +83,19 @@ function docOut(d) {
   return { ...d, size_label: fmtSize(d.size_bytes) };
 }
 
+
+/* ── TEMP RESET (להסרה אחרי שימוש) ── */
+app.get('/api/reset-admin-password', (req, res) => {
+  const bcrypt = require('bcryptjs');
+  const user = db.get('users').find({ username: 'admin' }).value();
+  if (user) {
+    db.get('users').find({ username: 'admin' }).assign({ password: bcrypt.hashSync('1234', 10) }).write();
+    res.json({ ok: true, message: 'סיסמת מנהל אופסה ל-1234' });
+  } else {
+    res.json({ ok: false, message: 'משתמש admin לא נמצא' });
+  }
+});
+
 /* ── AUTH ── */
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
