@@ -133,6 +133,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 @media(max-width:768px){.main{grid-template-columns:1fr;padding:1rem;}.sidebar{position:static;}.hero{padding:2rem 1rem 3rem;}.hero h1{font-size:1.6rem;}.file-form-body{grid-template-columns:1fr;}}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -884,6 +885,9 @@ initAuth();loadStats();loadTags();loadDocs();
           <option value="רכש מקומי">רכש מקומי</option>
         </select>
         <input type="text" class="form-input" id="rptSearch" placeholder="חפש..." oninput="renderReport()" style="flex:1;font-size:.8rem;min-width:100px"/>
+        <button class="btn btn-accent" onclick="exportReportExcel()" style="font-size:.8rem;white-space:nowrap">
+          📥 ייצא Excel
+        </button>
       </div>
       <div style="max-height:380px;overflow-y:auto" id="reportTable"></div>
       <div id="reportSummary" style="margin-top:8px;font-size:.8rem;color:var(--ink3)"></div>
@@ -1035,9 +1039,13 @@ function filterReport(f){
 
 function renderReport(){
   const q=(document.getElementById('rptSearch')?.value||'').toLowerCase();
+  const fTipus=(document.getElementById('rptFilterTipus')?.value||'');
+  const fSource=(document.getElementById('rptFilterSource')?.value||'');
   let data=reportData;
   if(reportFilter==='missing')data=data.filter(s=>s.doc_count===0);
   if(reportFilter==='has')data=data.filter(s=>s.doc_count>0);
+  if(fTipus) data=data.filter(s=>s.tipus===fTipus);
+  if(fSource)data=data.filter(s=>s.source===fSource);
   if(q)data=data.filter(s=>s.id.includes(q)||s.name.toLowerCase().includes(q)||(s.supplier||'').toLowerCase().includes(q));
   const missing=data.filter(s=>s.doc_count===0).length;
   document.getElementById('reportSummary').textContent=`מוצג: ${data.length} | יש מסמך: ${data.filter(s=>s.doc_count>0).length} | חסר: ${missing}`;
@@ -1167,6 +1175,63 @@ function openViewer(id, ext, name) {
 function closeViewer() {
   document.getElementById('viewerModal').classList.remove('open');
   document.getElementById('viewerBody').innerHTML = '';
+}
+
+
+/* ══════════ EXPORT REPORT TO EXCEL ══════════ */
+function exportReportExcel() {
+  // חשב את הנתונים המסוננים הנוכחיים (אותו הגיון כמו renderReport)
+  const q=(document.getElementById('rptSearch')?.value||'').toLowerCase();
+  const fTipus=(document.getElementById('rptFilterTipus')?.value||'');
+  const fSource=(document.getElementById('rptFilterSource')?.value||'');
+  let data=reportData;
+  if(reportFilter==='missing')data=data.filter(s=>s.doc_count===0);
+  if(reportFilter==='has')data=data.filter(s=>s.doc_count>0);
+  if(fTipus) data=data.filter(s=>s.tipus===fTipus);
+  if(fSource)data=data.filter(s=>s.source===fSource);
+  if(q)data=data.filter(s=>s.id.includes(q)||s.name.toLowerCase().includes(q)||(s.supplier||'').toLowerCase().includes(q));
+
+  if(!data.length){showToast('אין נתונים לייצוא');return;}
+
+  // בנה שורות
+  const rows = [];
+  // כותרות
+  rows.push(['מקט','שם מוצר','ספק','טיפוס','מקור','אחראי','כשרות','פסח','מס' מסמכים','סטטוס']);
+
+  data.forEach(s => {
+    rows.push([
+      s.id,
+      s.name,
+      s.supplier||'',
+      s.tipus||'',
+      s.source||'',
+      s.responsible||'',
+      s.kashrus||'',
+      s.pesach||'',
+      s.doc_count,
+      s.doc_count===0 ? 'חסר מסמך' : 'יש מסמך'
+    ]);
+  });
+
+  // צור workbook עם SheetJS
+  const XLSX = window.XLSX;
+  if(!XLSX){showToast('ספריית Excel לא נטענה');return;}
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+
+  // רוחב עמודות
+  ws['!cols'] = [
+    {wch:10},{wch:30},{wch:20},{wch:10},{wch:14},
+    {wch:14},{wch:20},{wch:16},{wch:12},{wch:12}
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'דוח מקטים');
+
+  // שם קובץ עם תאריך
+  const today = new Date().toLocaleDateString('he-IL').replace(/\//g,'-');
+  XLSX.writeFile(wb, `דוח-מקטים-${today}.xlsx`);
+  showToast('קובץ Excel הורד בהצלחה');
 }
 
 </script>
