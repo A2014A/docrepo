@@ -321,6 +321,9 @@ function canUploadEdit() {
 function canViewDownload() {
   return !!effectiveRole();
 }
+function canPreview(ext) {
+  return ['pdf','jpg','jpeg','png','gif','webp','doc','docx','xls','xlsx','ppt','pptx'].includes((ext||'').toLowerCase());
+}
 let currentUser=null,activeTag='הכל',activeDoctype='הכל';
 let editTags=[],chosenFiles=[],editingDocId=null,searchTimer=null;
 // per-file tag state: array of arrays
@@ -1268,6 +1271,9 @@ function effectiveRole() {
 
 function canViewDownload() {
   return !!effectiveRole();
+}
+function canPreview(ext) {
+  return ['pdf','jpg','jpeg','png','gif','webp','doc','docx','xls','xlsx','ppt','pptx'].includes((ext||'').toLowerCase());
 }
 
 function canUploadEdit() {
