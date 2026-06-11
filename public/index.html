@@ -308,6 +308,18 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 <script>
 const API='';
 let token=localStorage.getItem('docrepo_token')||null;
+let sessionRole = null; // יאותחל מאוחר יותר
+function effectiveRole() {
+  if (typeof currentUser !== 'undefined' && currentUser) return 'admin';
+  return sessionRole || sessionStorage.getItem('session_role') || null;
+}
+function canUploadEdit() {
+  const r = effectiveRole();
+  return r === 'admin' || r === 'assistant';
+}
+function canViewDownload() {
+  return !!effectiveRole();
+}
 let currentUser=null,activeTag='הכל',activeDoctype='הכל';
 let editTags=[],chosenFiles=[],editingDocId=null,searchTimer=null;
 // per-file tag state: array of arrays
