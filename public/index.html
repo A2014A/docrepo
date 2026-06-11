@@ -1634,7 +1634,7 @@ function renderSkuPicker() {
           <tr style="border-bottom:1px solid var(--border);cursor:pointer;background:${spSelected.has(s.id)?'var(--accent-light)':''}"
               onclick="spToggle('${s.id}',${JSON.stringify(s).replace(/'/g,"\'")})">
             <td style="padding:8px;text-align:center">
-              <input type="checkbox" ${spSelected.has(s.id)?'checked':''} onclick="event.stopPropagation();spToggle('${s.id}',${JSON.stringify(s).replace(/'/g,"\'")})" style="width:16px;height:16px;cursor:pointer"/>
+              <input type="checkbox" ${spSelected.has(String(s.id))?'checked':''} onclick="event.stopPropagation();spToggle('${s.id}',${JSON.stringify(s).replace(/'/g,"\'")})" style="width:16px;height:16px;cursor:pointer"/>
             </td>
             <td style="padding:8px;font-weight:600;color:var(--accent2)">${s.id}</td>
             <td style="padding:8px">${s.name}</td>
@@ -1647,8 +1647,9 @@ function renderSkuPicker() {
 }
 
 function spToggle(id, sku) {
-  if (spSelected.has(id)) spSelected.delete(id);
-  else spSelected.add(id);
+  const sid = String(id);
+  if (spSelected.has(sid)) spSelected.delete(sid);
+  else spSelected.add(sid);
   renderSkuPicker();
 }
 
@@ -1662,7 +1663,7 @@ function spSelectAll() {
   if (fSup) skus = skus.filter(s => s.supplier === fSup);
   if (fTip) skus = skus.filter(s => s.tipus === fTip);
   if (fSrc) skus = skus.filter(s => s.source === fSrc);
-  skus.forEach(s => spSelected.add(s.id));
+  skus.forEach(s => spSelected.add(String(s.id)));
   renderSkuPicker();
 }
 
@@ -1673,7 +1674,7 @@ function spClearAll() {
 
 function confirmSkuPicker() {
   // בנה מערך מקטים נבחרים
-  const chosen = spAllSkus.filter(s => spSelected.has(s.id));
+  const chosen = spAllSkus.filter(s => spSelected.has(String(s.id)));
   if (spMode === 'edit') {
     editSkus = chosen;
     renderSkuPills('edit');
