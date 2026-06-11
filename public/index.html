@@ -244,11 +244,10 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
     <div class="form-group"><label class="form-label">תיאור</label><input type="text" class="form-input" id="editDesc" placeholder="תיאור..."/></div>
     <div class="form-group full">
       <label class="form-label">מקטים מקושרים</label>
-      <div style="position:relative">
-        <input type="text" class="form-input" id="editSkuSearch" placeholder="חפש מקט לפי מספר או שם..." oninput="skuSearch('edit')" autocomplete="off"/>
-        <div id="editSkuDropdown" class="sku-dropdown" style="display:none"></div>
-      </div>
-      <div id="editSkuPills" class="tags-input-wrap" style="margin-top:6px;min-height:32px"></div>
+      <button type="button" class="btn btn-outline" style="width:100%;margin-bottom:6px" onclick="openSkuPicker('edit')">
+        🔍 בחר מקטים
+      </button>
+      <div id="editSkuPills" class="tags-input-wrap" style="min-height:32px"></div>
     </div>
     <div class="form-group">
       <label class="form-label">תאריך יצור</label>
@@ -515,11 +514,10 @@ function onFilesChosen(inp){
         </div>
         <div class="form-group full">
           <label class="form-label">מקטים מקושרים</label>
-          <div style="position:relative">
-            <input type="text" class="form-input" id="fskusearch_${i}" placeholder="חפש מקט לפי מספר או שם..." oninput="skuSearch('file',${i})" autocomplete="off"/>
-            <div id="fskudrop_${i}" class="sku-dropdown" style="display:none"></div>
-          </div>
-          <div id="fskupills_${i}" class="tags-input-wrap" style="margin-top:6px;min-height:32px"></div>
+          <button type="button" class="btn btn-outline" style="width:100%;margin-bottom:6px" onclick="openSkuPicker('file',${i})">
+            🔍 בחר מקטים
+          </button>
+          <div id="fskupills_${i}" class="tags-input-wrap" style="min-height:32px"></div>
         </div>
         <div class="form-group">
           <label class="form-label">תאריך יצור</label>
@@ -1556,6 +1554,133 @@ function previewLocalFile(i) {
   document.getElementById('viewerModal').classList.add('open');
 }
 
+
+/* ══════════ SKU PICKER MODAL ══════════ */
+let spAllSkus = [];
+let spSelected = new Set(); // Set of sku IDs
+let spMode = null;  // 'edit' | 'file'
+let spFileIdx = null;
+
+async function openSkuPicker(mode, idx) {
+  spMode = mode;
+  spFileIdx = idx !== undefined ? idx : null;
+
+  // טען מקטים אם צריך
+  if (!spAllSkus.length) {
+    spAllSkus = await apiFetch('/api/skus?all=1');
+    // מלא ספקים ייחודיים
+    const suppliers = [...new Set(spAllSkus.map(s => s.supplier).filter(Boolean))].sort();
+    const sel = document.getElementById('spFilterSupplier');
+    sel.innerHTML = '<option value="">כל הספקים</option>' +
+      suppliers.map(s => `<option value="${s}">${s}</option>`).join('');
+  }
+
+  // הגדר נבחרים קיימים
+  spSelected = new Set();
+  const existing = mode === 'edit' ? editSkus : (fileSkus[idx] || []);
+  existing.forEach(s => spSelected.add(s.id));
+
+  // נקה פילטרים
+  document.getElementById('spSearch').value = '';
+  document.getElementById('spFilterSupplier').value = '';
+  document.getElementById('spFilterTipus').value = '';
+  document.getElementById('spFilterSource').value = '';
+
+  renderSkuPicker();
+  document.getElementById('skuPickerModal').classList.add('open');
+}
+
+function closeSkuPicker() {
+  document.getElementById('skuPickerModal').classList.remove('open');
+}
+
+function renderSkuPicker() {
+  const q = document.getElementById('spSearch').value.toLowerCase();
+  const fSup = document.getElementById('spFilterSupplier').value;
+  const fTip = document.getElementById('spFilterTipus').value;
+  const fSrc = document.getElementById('spFilterSource').value;
+
+  let skus = spAllSkus;
+  if (q)    skus = skus.filter(s => s.id.includes(q) || s.name.toLowerCase().includes(q) || (s.supplier||'').toLowerCase().includes(q));
+  if (fSup) skus = skus.filter(s => s.supplier === fSup);
+  if (fTip) skus = skus.filter(s => s.tipus === fTip);
+  if (fSrc) skus = skus.filter(s => s.source === fSrc);
+
+  document.getElementById('spSelectedCount').textContent =
+    spSelected.size ? `${spSelected.size} נבחרו` : '';
+
+  if (!skus.length) {
+    document.getElementById('spList').innerHTML =
+      '<div style="text-align:center;padding:2rem;color:var(--ink3)">לא נמצאו מקטים</div>';
+    return;
+  }
+
+  document.getElementById('spList').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:.83rem">
+      <thead><tr style="background:var(--bg2);position:sticky;top:0">
+        <th style="padding:8px;width:36px"></th>
+        <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border2)">מקט</th>
+        <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border2)">שם מוצר</th>
+        <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border2)">ספק</th>
+        <th style="padding:8px;text-align:center;border-bottom:1px solid var(--border2)">טיפוס</th>
+        <th style="padding:8px;text-align:center;border-bottom:1px solid var(--border2)">מקור</th>
+      </tr></thead>
+      <tbody>
+        ${skus.map(s => `
+          <tr style="border-bottom:1px solid var(--border);cursor:pointer;background:${spSelected.has(s.id)?'var(--accent-light)':''}"
+              onclick="spToggle('${s.id}',${JSON.stringify(s).replace(/'/g,"\'")})">
+            <td style="padding:8px;text-align:center">
+              <input type="checkbox" ${spSelected.has(s.id)?'checked':''} onclick="event.stopPropagation();spToggle('${s.id}',${JSON.stringify(s).replace(/'/g,"\'")})" style="width:16px;height:16px;cursor:pointer"/>
+            </td>
+            <td style="padding:8px;font-weight:600;color:var(--accent2)">${s.id}</td>
+            <td style="padding:8px">${s.name}</td>
+            <td style="padding:8px;color:var(--ink3)">${s.supplier||''}</td>
+            <td style="padding:8px;text-align:center">${s.tipus?`<span style="font-size:.72rem;padding:2px 6px;border-radius:99px;background:#EEF2FF;color:#3730a3">${s.tipus}</span>`:''}</td>
+            <td style="padding:8px;text-align:center">${s.source?`<span style="font-size:.72rem;padding:2px 6px;border-radius:99px;background:${s.source==='יבוא'?'#fef9c3;color:#854d0e':'#dcfce7;color:#166534'}">${s.source}</span>`:''}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function spToggle(id, sku) {
+  if (spSelected.has(id)) spSelected.delete(id);
+  else spSelected.add(id);
+  renderSkuPicker();
+}
+
+function spSelectAll() {
+  const q = document.getElementById('spSearch').value.toLowerCase();
+  const fSup = document.getElementById('spFilterSupplier').value;
+  const fTip = document.getElementById('spFilterTipus').value;
+  const fSrc = document.getElementById('spFilterSource').value;
+  let skus = spAllSkus;
+  if (q)    skus = skus.filter(s => s.id.includes(q) || s.name.toLowerCase().includes(q) || (s.supplier||'').toLowerCase().includes(q));
+  if (fSup) skus = skus.filter(s => s.supplier === fSup);
+  if (fTip) skus = skus.filter(s => s.tipus === fTip);
+  if (fSrc) skus = skus.filter(s => s.source === fSrc);
+  skus.forEach(s => spSelected.add(s.id));
+  renderSkuPicker();
+}
+
+function spClearAll() {
+  spSelected.clear();
+  renderSkuPicker();
+}
+
+function confirmSkuPicker() {
+  // בנה מערך מקטים נבחרים
+  const chosen = spAllSkus.filter(s => spSelected.has(s.id));
+  if (spMode === 'edit') {
+    editSkus = chosen;
+    renderSkuPills('edit');
+  } else {
+    fileSkus[spFileIdx] = chosen;
+    renderSkuPills('file', spFileIdx);
+  }
+  closeSkuPicker();
+  showToast(`${chosen.length} מקטים נוספו`);
+}
+
 </script>
 
 <!-- SKU DOCS MODAL -->
@@ -1731,6 +1856,49 @@ function previewLocalFile(i) {
       <button class="btn btn-accent" style="width:100%" onclick="submitCodeLogin()">כניסה</button>
     </div>
 
+  </div>
+</div>
+
+<!-- SKU PICKER MODAL -->
+<div class="modal-bg" id="skuPickerModal">
+  <div class="modal" style="max-width:760px;width:96vw">
+    <div class="modal-header">
+      <div class="modal-title">בחירת מקטים</div>
+      <button class="modal-close" onclick="closeSkuPicker()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <!-- סינונים -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <input type="text" class="form-input" id="spSearch" placeholder="חפש מקט / שם / ספק..." oninput="renderSkuPicker()" style="flex:2;min-width:140px"/>
+      <select class="form-select" id="spFilterSupplier" onchange="renderSkuPicker()" style="flex:1;min-width:110px">
+        <option value="">כל הספקים</option>
+      </select>
+      <select class="form-select" id="spFilterTipus" onchange="renderSkuPicker()" style="flex:1;min-width:100px">
+        <option value="">כל הטיפוסים</option>
+        <option value="רכש">רכש</option>
+        <option value="יצור">יצור</option>
+      </select>
+      <select class="form-select" id="spFilterSource" onchange="renderSkuPicker()" style="flex:1;min-width:110px">
+        <option value="">כל המקורות</option>
+        <option value="יבוא">יבוא</option>
+        <option value="רכש מקומי">רכש מקומי</option>
+      </select>
+    </div>
+
+    <!-- כפתורי בחר הכל -->
+    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
+      <button class="btn btn-outline" style="font-size:.8rem;padding:5px 12px" onclick="spSelectAll()">✅ בחר הכל המוצג</button>
+      <button class="btn btn-outline" style="font-size:.8rem;padding:5px 12px" onclick="spClearAll()">✕ בטל הכל</button>
+      <span id="spSelectedCount" style="font-size:.82rem;color:var(--ink3);margin-right:auto"></span>
+    </div>
+
+    <!-- רשימת מקטים -->
+    <div style="max-height:380px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius)" id="spList"></div>
+
+    <div class="modal-footer" style="margin-top:12px">
+      <button class="btn btn-outline" onclick="closeSkuPicker()">ביטול</button>
+      <button class="btn btn-accent" onclick="confirmSkuPicker()">הוסף נבחרים</button>
+    </div>
   </div>
 </div>
 </body>
