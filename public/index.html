@@ -1626,10 +1626,10 @@ function renderSkuPicker() {
       </tr></thead>
       <tbody>
         ${skus.map(s => `
-          <tr style="border-bottom:1px solid var(--border);cursor:pointer;background:${spSelected.has(s.id)?'var(--accent-light)':''}"
-              onclick="spToggle('${s.id}',${JSON.stringify(s).replace(/'/g,"\'")})">
+          <tr style="border-bottom:1px solid var(--border);cursor:pointer;background:${spSelected.has(String(s.id))?'var(--accent-light)':''}"
+              onclick="spToggle('${s.id}')">
             <td style="padding:8px;text-align:center">
-              <input type="checkbox" ${spSelected.has(String(s.id))?'checked':''} onclick="event.stopPropagation();spToggle('${s.id}',${JSON.stringify(s).replace(/'/g,"\'")})" style="width:16px;height:16px;cursor:pointer"/>
+              <input type="checkbox" ${spSelected.has(String(s.id))?'checked':''} onclick="event.stopPropagation();spToggle('${s.id}')" style="width:16px;height:16px;cursor:pointer"/>
             </td>
             <td style="padding:8px;font-weight:600;color:var(--accent2)">${s.id}</td>
             <td style="padding:8px">${s.name}</td>
