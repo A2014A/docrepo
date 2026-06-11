@@ -1,4 +1,3 @@
-SHA: 2dd83ef8b1b0acb07eadf5334122f75fc7c8941b
 const express  = require('express');
 const cors     = require('cors');
 const path     = require('path');
