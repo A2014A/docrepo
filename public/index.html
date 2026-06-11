@@ -1641,7 +1641,7 @@ function renderSkuPicker() {
     </table>`;
 }
 
-function spToggle(id, sku) {
+function spToggle(id) {
   const sid = String(id);
   if (spSelected.has(sid)) spSelected.delete(sid);
   else spSelected.add(sid);
