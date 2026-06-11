@@ -175,6 +175,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       <button class="btn btn-accent" style="width:100%;padding:10px" onclick="openUpload()">+ העלאת מסמכים</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openSkuManager()">⚙ ניהול מקטים</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
+      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangeViewCode()">🔑 שינוי קוד צפייה</button>
     </div>
   </aside>
   <section>
@@ -399,12 +400,12 @@ function renderCard(d,i){
     ${(d.skus||[]).length?`<div class="doc-skus">${d.skus.map(s=>`<span class="sku-pill" style="font-size:.72rem">${s.id} — ${s.name.length>24?s.name.slice(0,24)+'…':s.name}</span>`).join('')}</div>`:''}
     ${isAdm&&d.expiry_date?`<div style="margin-top:5px">${expiryBadge(d.expiry_date)}</div>`:''}
     <div class="doc-card-footer">
-      ${canPreview(d.ext)?`<button class="dl-btn" onclick="openViewer(${d.id},'${d.ext}','${d.name.replace(/'/g,"\\'")}')">
+      ${canPreview(d.ext)?`<button class="dl-btn" onclick="guardedView(${d.id},'${d.ext}','${d.name.replace(/'/g,"\\'")}')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>צפה
       </button>`:''}
-      <a class="dl-btn" href="/api/docs/${d.id}/download" download>
+      <button class="dl-btn" onclick="guardedDownload(${d.id},'${d.name.replace(/'/g,"\\'")}','${d.ext}')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
-      </a>
+      </button>
       ${isAdm?`
       <button class="icon-btn" onclick="openEdit(${d.id})" title="עריכה">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -1134,9 +1135,9 @@ function renderSkuDocs() {
             <td style="padding:8px 10px;text-align:center;color:var(--ink3)">${d.production_date ? new Date(d.production_date).toLocaleDateString('he-IL') : '—'}</td>
             <td style="padding:8px 10px;text-align:center">${d.expiry_date ? expiryBadge(d.expiry_date) : '—'}</td>
             <td style="padding:8px 10px;text-align:center">
-              <a href="/api/docs/${d.id}/download" download style="font-size:.78rem;padding:5px 12px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--ink2);text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+              <button onclick="guardedDownload(${d.id},'${d.name}','${d.ext}')" style="font-size:.78rem;padding:5px 12px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--ink2);cursor:pointer;display:inline-flex;align-items:center;gap:4px">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
-              </a>
+              </button>
             </td>
           </tr>`).join('')}
       </tbody>
@@ -1234,6 +1235,92 @@ function exportReportExcel() {
   showToast('קובץ Excel הורד בהצלחה');
 }
 
+
+/* ══════════ VIEW CODE GUARD ══════════ */
+let viewCodeVerified = sessionStorage.getItem('view_code_ok') === '1';
+let pendingAction = null; // {type:'view'|'download', args}
+
+function guardedView(id, ext, name) {
+  if (viewCodeVerified) { openViewer(id, ext, name); return; }
+  pendingAction = { type: 'view', args: [id, ext, name] };
+  openViewCodeModal();
+}
+
+function guardedDownload(id, name, ext) {
+  if (viewCodeVerified) { doDownload(id, name, ext); return; }
+  pendingAction = { type: 'download', args: [id, name, ext] };
+  openViewCodeModal();
+}
+
+function doDownload(id, name, ext) {
+  const a = document.createElement('a');
+  a.href = `/api/docs/${id}/download`;
+  a.download = name + (ext ? '.'+ext : '');
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function openViewCodeModal() {
+  document.getElementById('viewCodeInput').value = '';
+  document.getElementById('viewCodeAlert').innerHTML = '';
+  document.getElementById('viewCodeModal').classList.add('open');
+  setTimeout(() => document.getElementById('viewCodeInput').focus(), 100);
+}
+
+function closeViewCodeModal() {
+  document.getElementById('viewCodeModal').classList.remove('open');
+  pendingAction = null;
+}
+
+async function submitViewCode() {
+  const code = document.getElementById('viewCodeInput').value.trim();
+  if (!code) return;
+  try {
+    const data = await apiFetch('/api/view-code/check?code=' + encodeURIComponent(code));
+    if (data.ok) {
+      viewCodeVerified = true;
+      sessionStorage.setItem('view_code_ok', '1');
+      document.getElementById('viewCodeModal').classList.remove('open');
+      // בצע את הפעולה שהמתינה
+      if (pendingAction) {
+        const { type, args } = pendingAction;
+        pendingAction = null;
+        if (type === 'view')     openViewer(...args);
+        if (type === 'download') doDownload(...args);
+      }
+    } else {
+      document.getElementById('viewCodeAlert').innerHTML = '<div class="alert alert-error">קוד שגוי</div>';
+    }
+  } catch(e) {
+    document.getElementById('viewCodeAlert').innerHTML = '<div class="alert alert-error">שגיאה</div>';
+  }
+}
+
+/* ── ניהול קוד צפייה (מנהל) ── */
+function openChangeViewCode() {
+  document.getElementById('newViewCode').value = '';
+  document.getElementById('viewCodeChangeAlert').innerHTML = '';
+  document.getElementById('changeViewCodeModal').classList.add('open');
+}
+function closeChangeViewCode() {
+  document.getElementById('changeViewCodeModal').classList.remove('open');
+}
+async function submitChangeViewCode() {
+  const code = document.getElementById('newViewCode').value.trim();
+  if (!code || code.length < 2) {
+    document.getElementById('viewCodeChangeAlert').innerHTML = '<div class="alert alert-error">קוד קצר מדי (לפחות 2 תווים)</div>';
+    return;
+  }
+  try {
+    await apiFetch('/api/view-code', { method: 'PATCH', body: JSON.stringify({ code }) });
+    closeChangeViewCode();
+    showToast('קוד הצפייה עודכן בהצלחה');
+  } catch(e) {
+    document.getElementById('viewCodeChangeAlert').innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
 </script>
 
 <!-- SKU DOCS MODAL -->
@@ -1289,6 +1376,43 @@ function exportReportExcel() {
       </div>
     </div>
     <div id="viewerBody" style="flex:1;overflow:hidden;background:#f0f0f0;display:flex;align-items:center;justify-content:center"></div>
+  </div>
+</div>
+
+<!-- VIEW CODE MODAL -->
+<div class="modal-bg" id="viewCodeModal">
+  <div class="modal" style="max-width:340px">
+    <div class="modal-header">
+      <div class="modal-title">קוד גישה</div>
+    </div>
+    <p style="font-size:.88rem;color:var(--ink2);margin-bottom:1rem">הזן את קוד הגישה לצפייה והורדת מסמכים</p>
+    <div id="viewCodeAlert"></div>
+    <div class="form-group">
+      <input type="password" class="form-input" id="viewCodeInput" placeholder="הזן קוד..." onkeydown="if(event.key==='Enter')submitViewCode()"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeViewCodeModal()">ביטול</button>
+      <button class="btn btn-accent" onclick="submitViewCode()">אישור</button>
+    </div>
+  </div>
+</div>
+
+<!-- CHANGE VIEW CODE MODAL (מנהל) -->
+<div class="modal-bg" id="changeViewCodeModal">
+  <div class="modal" style="max-width:340px">
+    <div class="modal-header">
+      <div class="modal-title">שינוי קוד צפייה</div>
+      <button class="modal-close" onclick="closeChangeViewCode()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div id="viewCodeChangeAlert"></div>
+    <div class="form-group">
+      <label class="form-label">קוד חדש</label>
+      <input type="text" class="form-input" id="newViewCode" placeholder="הזן קוד חדש..."/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeChangeViewCode()">ביטול</button>
+      <button class="btn btn-accent" onclick="submitChangeViewCode()">שמור קוד</button>
+    </div>
   </div>
 </div>
 </body>
