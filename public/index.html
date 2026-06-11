@@ -59,6 +59,21 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 .badge{font-size:.68rem;padding:2px 8px;border-radius:99px;font-weight:500;}
 .badge-type{background:#EEF2FF;color:#3730a3;} .badge-hidden{background:#FEF3C7;color:#92400E;}
 .doc-tags{display:flex;gap:5px;flex-wrap:wrap;}
+.sku-dropdown{position:absolute;top:100%;right:0;left:0;background:#fff;border:1px solid var(--border2);border-radius:var(--radius);box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:200;max-height:220px;overflow-y:auto;}
+.sku-item{padding:8px 12px;cursor:pointer;font-size:.85rem;border-bottom:1px solid var(--border1);display:flex;gap:8px;align-items:baseline;}
+.sku-item:hover{background:var(--bg2);}
+.sku-item-id{font-weight:700;color:var(--accent2);min-width:52px;}
+.sku-item-name{color:var(--ink1);flex:1;}
+.sku-item-sup{color:var(--ink3);font-size:.75rem;}
+.sku-pill{background:var(--accent2);color:#fff;border-radius:20px;padding:3px 10px 3px 8px;font-size:.78rem;display:inline-flex;align-items:center;gap:5px;}
+.sku-pill button{background:none;border:none;color:#fff;cursor:pointer;font-size:.9rem;line-height:1;padding:0;opacity:.8;}
+.sku-pill button:hover{opacity:1;}
+.doc-skus{display:flex;gap:5px;flex-wrap:wrap;margin-top:4px;}
+.expiry-badge{display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;padding:2px 8px;border-radius:12px;}
+.expiry-ok{background:#d1fae5;color:#065f46;}
+.expiry-soon{background:#fef3c7;color:#92400e;}
+.expiry-expired{background:#fee2e2;color:#991b1b;}
+.expiry-none{background:var(--bg2);color:var(--ink3);}
 .tag-pill{font-size:.68rem;padding:2px 8px;border-radius:99px;background:var(--accent-light);color:var(--accent);font-weight:500;}
 .doc-card-footer{display:flex;gap:6px;margin-top:2px;}
 .dl-btn{flex:1;padding:7px;border-radius:var(--radius);border:1px solid var(--border2);background:transparent;font-family:'Heebo',sans-serif;font-size:.78rem;color:var(--ink2);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s;text-decoration:none;}
@@ -224,6 +239,18 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       </div>
     </div>
     <div class="form-group"><label class="form-label">תיאור</label><input type="text" class="form-input" id="editDesc" placeholder="תיאור..."/></div>
+    <div class="form-group full">
+      <label class="form-label">מקטים מקושרים</label>
+      <div style="position:relative">
+        <input type="text" class="form-input" id="editSkuSearch" placeholder="חפש מקט לפי מספר או שם..." oninput="skuSearch('edit')" autocomplete="off"/>
+        <div id="editSkuDropdown" class="sku-dropdown" style="display:none"></div>
+      </div>
+      <div id="editSkuPills" class="tags-input-wrap" style="margin-top:6px;min-height:32px"></div>
+    </div>
+    <div class="form-group" id="editExpiryGroup">
+      <label class="form-label">תאריך תוקף <span style="font-size:.75rem;color:var(--ink3)">(גלוי למנהל בלבד)</span></label>
+      <input type="date" class="form-input" id="editExpiry"/>
+    </div>
     <div class="form-group">
       <div class="toggle-row">
         <label for="editHidden">מסמך מוסתר (גלוי למנהל בלבד)</label>
@@ -363,6 +390,8 @@ function renderCard(d,i){
     </div>
     ${d.description?`<p style="font-size:.8rem;color:var(--ink2);line-height:1.4">${d.description}</p>`:''}
     ${(d.tags||[]).length?`<div class="doc-tags">${d.tags.map(t=>`<span class="tag-pill">${t}</span>`).join('')}</div>`:''}
+    ${(d.skus||[]).length?`<div class="doc-skus">${d.skus.map(s=>`<span class="sku-pill" style="font-size:.72rem">${s.id} — ${s.name.length>24?s.name.slice(0,24)+'…':s.name}</span>`).join('')}</div>`:''}
+    ${isAdm&&d.expiry_date?`<div style="margin-top:5px">${expiryBadge(d.expiry_date)}</div>`:''}
     <div class="doc-card-footer">
       <a class="dl-btn" href="/api/docs/${d.id}/download" download>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
@@ -396,7 +425,7 @@ function closeUpload(){
   document.getElementById('uploadAlert').innerHTML='';
   document.getElementById('fileInput').value='';
   document.getElementById('fileForms').innerHTML='';
-  chosenFiles=[];fileTags=[];
+  chosenFiles=[];fileTags=[];fileSkus={};
   const btn=document.getElementById('uploadSubmitBtn');
   btn.disabled=false;btn.textContent='העלה';
 }
@@ -445,6 +474,18 @@ function onFilesChosen(inp){
           </div>
         </div>
         <div class="form-group full">
+          <label class="form-label">מקטים מקושרים</label>
+          <div style="position:relative">
+            <input type="text" class="form-input" id="fskusearch_${i}" placeholder="חפש מקט לפי מספר או שם..." oninput="skuSearch('file',${i})" autocomplete="off"/>
+            <div id="fskudrop_${i}" class="sku-dropdown" style="display:none"></div>
+          </div>
+          <div id="fskupills_${i}" class="tags-input-wrap" style="margin-top:6px;min-height:32px"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">תאריך תוקף <span style="font-size:.75rem;color:var(--ink3)">(גלוי למנהל בלבד)</span></label>
+          <input type="date" class="form-input" id="fexpiry_${i}"/>
+        </div>
+        <div class="form-group full">
           <div class="toggle-row">
             <label for="fhidden_${i}">מסמך מוסתר (גלוי למנהל בלבד)</label>
             <label class="toggle"><input type="checkbox" id="fhidden_${i}"/><span class="toggle-slider"></span></label>
@@ -491,11 +532,15 @@ async function submitUpload(){
       const desc=document.getElementById(`fdesc_${i}`)?.value.trim()||'';
       const hidden=document.getElementById(`fhidden_${i}`)?.checked||false;
       const tags=fileTags[i].length?fileTags[i]:[];
+      const skus=fileSkus[i]||[];
+      const expiry=document.getElementById(`fexpiry_${i}`)?.value||'';
       const fd=new FormData();
       fd.append('file',chosenFiles[i]);
       fd.append('name',name);
       fd.append('description',desc);
       fd.append('tags',JSON.stringify(tags));
+      fd.append('skus',JSON.stringify(skus));
+      fd.append('expiry_date',expiry);
       fd.append('doctype',doctype);
       fd.append('hidden',hidden);
       const res=await fetch(API+'/api/docs',{method:'POST',headers:authHeaders(),body:fd});
@@ -511,17 +556,93 @@ async function submitUpload(){
   }
 }
 
+/* ══════════ EXPIRY ══════════ */
+function expiryBadge(dateStr){
+  if(!dateStr) return '';
+  const exp=new Date(dateStr);
+  const now=new Date();
+  const days=Math.ceil((exp-now)/(1000*60*60*24));
+  const fmt=exp.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric'});
+  if(days<0)  return `<span class="expiry-badge expiry-expired">⚠ פג תוקף ${fmt}</span>`;
+  if(days<=30)return `<span class="expiry-badge expiry-soon">⏳ תוקף עד ${fmt} (${days} ימים)</span>`;
+  return      `<span class="expiry-badge expiry-ok">✓ תוקף עד ${fmt}</span>`;
+}
+
+/* ══════════ SKU LOGIC ══════════ */
+let editSkus = [];
+let fileSkus = {};  // fileSkus[i] = array of {id,name,supplier}
+
+let skuSearchTimer = null;
+async function skuSearch(mode, idx) {
+  clearTimeout(skuSearchTimer);
+  const inputId = mode==='edit' ? 'editSkuSearch' : `fskusearch_${idx}`;
+  const dropId  = mode==='edit' ? 'editSkuDropdown' : `fskudrop_${idx}`;
+  const q = document.getElementById(inputId)?.value.trim();
+  if (!q || q.length < 1) { document.getElementById(dropId).style.display='none'; return; }
+  skuSearchTimer = setTimeout(async () => {
+    const results = await apiFetch(`/api/skus?q=${encodeURIComponent(q)}`);
+    const drop = document.getElementById(dropId);
+    if (!results.length) { drop.style.display='none'; return; }
+    drop.innerHTML = results.map(s =>
+      `<div class="sku-item" onclick="addSku('${mode}',${idx||0},${JSON.stringify(s).replace(/"/g,'&quot;')})">
+        <span class="sku-item-id">${s.id}</span>
+        <span class="sku-item-name">${s.name}</span>
+        <span class="sku-item-sup">${s.supplier||''}</span>
+      </div>`
+    ).join('');
+    drop.style.display='block';
+  }, 200);
+}
+
+function addSku(mode, idx, sku) {
+  const dropId  = mode==='edit' ? 'editSkuDropdown' : `fskudrop_${idx}`;
+  const inputId = mode==='edit' ? 'editSkuSearch'   : `fskusearch_${idx}`;
+  document.getElementById(dropId).style.display='none';
+  document.getElementById(inputId).value='';
+  if (mode==='edit') {
+    if (!editSkus.find(s=>s.id===sku.id)) { editSkus.push(sku); renderSkuPills('edit'); }
+  } else {
+    if (!fileSkus[idx]) fileSkus[idx]=[];
+    if (!fileSkus[idx].find(s=>s.id===sku.id)) { fileSkus[idx].push(sku); renderSkuPills('file',idx); }
+  }
+}
+
+function removeSku(mode, idx, skuId) {
+  if (mode==='edit') { editSkus=editSkus.filter(s=>s.id!==skuId); renderSkuPills('edit'); }
+  else { fileSkus[idx]=(fileSkus[idx]||[]).filter(s=>s.id!==skuId); renderSkuPills('file',idx); }
+}
+
+function renderSkuPills(mode, idx) {
+  const pillsId = mode==='edit' ? 'editSkuPills' : `fskupills_${idx}`;
+  const arr = mode==='edit' ? editSkus : (fileSkus[idx]||[]);
+  const el = document.getElementById(pillsId); if(!el) return;
+  el.innerHTML = arr.map(s =>
+    `<span class="sku-pill">${s.id} — ${s.name.length>28?s.name.slice(0,28)+'…':s.name}
+      <button onclick="removeSku('${mode}',${idx||0},'${s.id}')" aria-label="הסר">×</button>
+    </span>`
+  ).join('');
+}
+
+// Close dropdowns on outside click
+document.addEventListener('click', e => {
+  document.querySelectorAll('.sku-dropdown').forEach(d => {
+    if (!d.contains(e.target)) d.style.display='none';
+  });
+});
+
 /* ══════════ EDIT ══════════ */
 async function openEdit(id){
   const docs=await apiFetch('/api/docs');
   const d=docs.find(x=>x.id===id);if(!d)return;
-  editingDocId=id;editTags=[...(d.tags||[])];
+  editingDocId=id;editTags=[...(d.tags||[])];editSkus=[...(d.skus||[])];
   document.getElementById('editName').value=d.name;
   document.getElementById('editDesc').value=d.description||'';
   document.getElementById('editDocType').value=d.doctype||'';
   document.getElementById('editHidden').checked=!!d.hidden;
+  document.getElementById('editExpiry').value=d.expiry_date||'';
   document.getElementById('editAlert').innerHTML='';
-  renderEditPills();
+  document.getElementById('editSkuSearch').value='';
+  renderEditPills();renderSkuPills('edit');
   document.getElementById('editModal').classList.add('open');
 }
 function closeEdit(){document.getElementById('editModal').classList.remove('open');editingDocId=null;editTags=[];}
@@ -549,7 +670,9 @@ async function submitEdit(){
     await apiFetch(`/api/docs/${editingDocId}`,{method:'PATCH',body:JSON.stringify({
       name,description:document.getElementById('editDesc').value.trim(),
       tags:editTags,doctype:document.getElementById('editDocType').value,
-      hidden:document.getElementById('editHidden').checked
+      hidden:document.getElementById('editHidden').checked,
+      skus:editSkus,
+      expiry_date:document.getElementById('editExpiry').value
     })});
     closeEdit();showToast('המסמך עודכן בהצלחה');loadAll();
   }catch(e){document.getElementById('editAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
