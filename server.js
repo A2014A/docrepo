@@ -17,7 +17,7 @@ const DATA_DIR    = path.join(__dirname, 'data');
 [UPLOADS_DIR, DATA_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
 const db = low(new FileSync(path.join(DATA_DIR, 'db.json')));
-db.defaults({ users: [], documents: [], skus: [], nextDocId: 1, nextUserId: 1, view_code: '1234' }).write();
+db.defaults({ users: [], documents: [], skus: [], nextDocId: 1, nextUserId: 1, view_code: '1234', assistant_code: '5678', viewer_code: '0000' }).write();
 
 if (!db.get('users').find({ username: 'admin' }).value()) {
   const id = db.get('nextUserId').value();
@@ -55,13 +55,24 @@ function requireAuth(req, res, next) {
   catch { res.status(401).json({ error: 'פג תוקף ההתחברות' }); }
 }
 
-function isAdminReq(req) {
+function getReqRole(req) {
   try {
     const h = req.headers.authorization || '';
     const t = h.startsWith('Bearer ') ? h.slice(7) : null;
-    if (t) { jwt.verify(t, JWT_SECRET); return true; }
+    if (t) {
+      const decoded = jwt.verify(t, JWT_SECRET);
+      return decoded.role || 'admin';
+    }
   } catch {}
-  return false;
+  return null;
+}
+function isAdminReq(req)     { return getReqRole(req) === 'admin'; }
+function isAssistantReq(req) { const r = getReqRole(req); return r === 'admin' || r === 'assistant'; }
+
+/* middleware: רק מנהל */
+function requireAdmin(req, res, next) {
+  if (!isAdminReq(req)) return res.status(403).json({ error: 'נדרשת הרשאת מנהל' });
+  next();
 }
 
 function fmtSize(bytes) {
@@ -83,7 +94,7 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ token, username: user.username, role: user.role });
 });
 
-app.patch('/api/auth/password', requireAuth, (req, res) => {
+app.patch('/api/auth/password', requireAuth, requireAdmin, (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const user = db.get('users').find({ id: req.user.id }).value();
   if (!bcrypt.compareSync(currentPassword, user.password))
@@ -134,7 +145,7 @@ app.patch('/api/skus/:id', requireAuth, (req, res) => {
   res.json(db.get('skus').find({ id: req.params.id }).value());
 });
 
-app.delete('/api/skus/:id', requireAuth, (req, res) => {
+app.delete('/api/skus/:id', requireAuth, requireAdmin, (req, res) => {
   if (!db.get('skus').find({ id: req.params.id }).value())
     return res.status(404).json({ error: 'מקט לא נמצא' });
   db.get('skus').remove({ id: req.params.id }).write();
@@ -322,7 +333,7 @@ app.patch('/api/docs/:id', requireAuth, (req, res) => {
 });
 
 /* ── DELETE ── */
-app.delete('/api/docs/:id', requireAuth, (req, res) => {
+app.delete('/api/docs/:id', requireAuth, requireAdmin, (req, res) => {
   const id  = parseInt(req.params.id);
   const doc = db.get('documents').find({ id }).value();
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
@@ -334,6 +345,24 @@ app.delete('/api/docs/:id', requireAuth, (req, res) => {
 
 /* ── DOWNLOAD ── */
 
+
+/* ── ROLE CODES ── */
+app.get('/api/role-code/check', (req, res) => {
+  const { code } = req.query;
+  const ac = db.get('assistant_code').value();
+  const vc = db.get('viewer_code').value();
+  if (code === ac) return res.json({ ok: true, role: 'assistant' });
+  if (code === vc) return res.json({ ok: true, role: 'viewer' });
+  res.json({ ok: false });
+});
+
+app.patch('/api/role-codes', requireAuth, requireAdmin, (req, res) => {
+  const { assistant_code, viewer_code } = req.body;
+  if (assistant_code !== undefined) db.set('assistant_code', assistant_code).write();
+  if (viewer_code    !== undefined) db.set('viewer_code',    viewer_code).write();
+  res.json({ ok: true });
+});
+
 /* ── VIEW CODE ── */
 app.get('/api/view-code/check', (req, res) => {
   const { code } = req.query;
@@ -341,7 +370,7 @@ app.get('/api/view-code/check', (req, res) => {
   res.json({ ok: code === stored });
 });
 
-app.patch('/api/view-code', requireAuth, (req, res) => {
+app.patch('/api/view-code', requireAuth, requireAdmin, (req, res) => {
   const { code } = req.body;
   if (!code || code.length < 2) return res.status(400).json({ error: 'קוד קצר מדי' });
   db.set('view_code', code).write();
@@ -351,7 +380,7 @@ app.patch('/api/view-code', requireAuth, (req, res) => {
 app.get('/api/docs/:id/download', (req, res) => {
   const doc = db.get('documents').find({ id: parseInt(req.params.id) }).value();
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
-  if (doc.hidden && !isAdminReq(req)) return res.status(403).json({ error: 'אין גישה' });
+  if (doc.hidden && !isAssistantReq(req)) return res.status(403).json({ error: 'אין גישה' });
   const fp = path.join(UPLOADS_DIR, doc.filename);
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'הקובץ לא נמצא' });
   const ext = doc.ext ? '.'+doc.ext : path.extname(doc.filename);
