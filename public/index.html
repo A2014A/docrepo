@@ -452,6 +452,10 @@ function onFilesChosen(inp){
         <div class="file-form-filename">${f.name}</div>
         <div class="file-form-size">${size}</div>
       </div>
+      <div style="padding:4px 0 8px 0">
+        <button class="btn btn-outline" style="font-size:.8rem;padding:5px 12px" onclick="aiIdentify(${i})">🤖 זהה אוטומטית</button>
+        <span id="faiStatus_${i}" style="font-size:.78rem;color:var(--ink3);margin-right:8px"></span>
+      </div>
       <div class="file-form-body">
         <div class="form-group full">
           <label class="form-label">שם המסמך</label>
@@ -554,6 +558,39 @@ async function submitUpload(){
   }catch(e){
     document.getElementById('uploadAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;
     btn.disabled=false;btn.textContent='העלה';
+  }
+}
+
+/* ══════════ AI IDENTIFY ══════════ */
+async function aiIdentify(i){
+  const file = chosenFiles[i];
+  if(!file) return;
+  const status = document.getElementById(`faiStatus_${i}`);
+  status.textContent = '⏳ מזהה...';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch(API+'/api/identify', {method:'POST', headers:authHeaders(), body:fd});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error);
+    // מלא שדות אוטומטית
+    if(data.name) document.getElementById(`fname_${i}`).value = data.name;
+    if(data.doctype) document.getElementById(`ftype_${i}`).value = data.doctype;
+    if(data.description) document.getElementById(`fdesc_${i}`).value = data.description;
+    if(data.expiry_date) document.getElementById(`fexpiry_${i}`).value = data.expiry_date;
+    // הוסף מקטים מוצעים
+    if(data.suggested_skus?.length){
+      if(!fileSkus[i]) fileSkus[i]=[];
+      data.suggested_skus.forEach(s=>{
+        if(!fileSkus[i].find(x=>x.id===s.id)) fileSkus[i].push(s);
+      });
+      renderSkuPills('file', i);
+    }
+    status.textContent = `✓ זוהה: ${data.doctype||''}${data.suggested_skus?.length?' | '+data.suggested_skus.length+' מקטים':''}`;
+    status.style.color = '#059669';
+  } catch(e) {
+    status.textContent = '⚠ שגיאה: '+e.message;
+    status.style.color = '#dc2626';
   }
 }
 

@@ -347,3 +347,64 @@ app.listen(PORT, () => {
   console.log(`\n מאגר מסמכים פועל על http://localhost:${PORT}`);
   console.log(`  כניסת מנהל: admin / 1234\n`);
 });
+
+/* ── AI IDENTIFY ── */
+app.post('/api/identify', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY לא מוגדר' });
+  try {
+    const fs2 = require('fs');
+    const fp = path.join(UPLOADS_DIR, req.file.filename);
+    const fileData = fs2.readFileSync(fp).toString('base64');
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    // קבל רשימת שמות מקטים לחיפוש
+    const skus = db.get('skus').value().slice(0, 800);
+    const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
+    const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
+
+קרא את המסמך המצורף וענה בדיוק בפורמט JSON הבא בלבד:
+{
+  "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
+  "name": "שם קצר ומתאר של המסמך בעברית",
+  "expiry_date": "תאריך תוקף בפורמט YYYY-MM-DD אם מופיע, אחרת null",
+  "description": "תיאור קצר של המסמך בעברית",
+  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
+}
+
+רשימת המקטים האפשריים:
+${skuList}
+
+ענה רק ב-JSON, ללא הסברים נוספים.`;
+    const body = {
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } },
+          { type: 'text', text: prompt }
+        ]
+      }]
+    };
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'pdfs-2024-09-25' },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || 'שגיאת API');
+    const text = data.content[0].text.replace(/```json|```/g, '').trim();
+    const result = JSON.parse(text);
+    // הוסף פרטי מקטים מלאים
+    result.suggested_skus = (result.suggested_skus || []).map(id => {
+      const sku = db.get('skus').find({ id: String(id) }).value();
+      return sku || { id: String(id), name: '', supplier: '' };
+    }).filter(s => s.name);
+    // נקה קובץ זמני
+    if (fs2.existsSync(fp)) fs2.unlinkSync(fp);
+    res.json(result);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
