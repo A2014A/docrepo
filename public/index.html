@@ -271,19 +271,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
   </div>
 </div>
 
-<!-- LOGIN MODAL -->
-<div class="modal-bg" id="loginModal">
-  <div class="modal" style="max-width:360px">
-    <div class="modal-header">
-      <div class="modal-title">כניסת מנהל</div>
-      <button class="modal-close" onclick="closeLogin()" aria-label="סגור"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <div id="loginAlert"></div>
-    <div class="form-group"><label class="form-label">שם משתמש</label><input type="text" class="form-input" id="loginUser" placeholder="שם משתמש" onkeydown="if(event.key==='Enter')doLogin()"/></div>
-    <div class="form-group"><label class="form-label">סיסמה</label><input type="password" class="form-input" id="loginPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"/></div>
-    <button class="btn btn-accent" style="width:100%" onclick="doLogin()">כניסה</button>
-  </div>
-</div>
+<!-- login modal moved to mainLoginModal -->
 
 <!-- CHANGE PASSWORD MODAL -->
 <div class="modal-bg" id="changePassModal">
@@ -764,8 +752,8 @@ async function submitEdit(){
 }
 
 /* ══════════ LOGIN ══════════ */
-function openLogin(){document.getElementById('loginModal').classList.add('open');}
-function closeLogin(){document.getElementById('loginModal').classList.remove('open');document.getElementById('loginAlert').innerHTML='';}
+function openLogin(){ openMainLogin(); showLoginForm('admin'); }
+function closeLogin(){ closeMainLogin(); }
 async function doLogin(){
   const username=document.getElementById('loginUser').value.trim();
   const password=document.getElementById('loginPass').value;
@@ -1645,24 +1633,7 @@ function openGuestLogin() { openMainLogin(); }
   </div>
 </div>
 
-<!-- GUEST LOGIN MODAL -->
-<div class="modal-bg" id="guestLoginModal">
-  <div class="modal" style="max-width:340px">
-    <div class="modal-header">
-      <div class="modal-title">כניסה למערכת</div>
-      <button class="modal-close" onclick="closeGuestLogin()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-    <p style="font-size:.88rem;color:var(--ink2);margin-bottom:1rem">הזן קוד גישה</p>
-    <div id="guestLoginAlert"></div>
-    <div class="form-group">
-      <input type="password" class="form-input" id="guestCodeInput" placeholder="קוד גישה..." onkeydown="if(event.key==='Enter')submitGuestLogin()"/>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-outline" onclick="closeGuestLogin()">ביטול</button>
-      <button class="btn btn-accent" onclick="submitGuestLogin()">כניסה</button>
-    </div>
-  </div>
-</div>
+<!-- guest login modal moved to mainLoginModal -->
 
 <!-- MAIN LOGIN MODAL -->
 <div class="modal-bg" id="mainLoginModal">
