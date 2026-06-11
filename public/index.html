@@ -296,6 +296,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 <script>
 const API='';
 let token=localStorage.getItem('docrepo_token')||null;
+let sessionRole = sessionStorage.getItem('session_role') || null;
 function effectiveRole() {
   if (typeof currentUser !== 'undefined' && currentUser) return 'admin';
   return sessionRole || sessionStorage.getItem('session_role') || null;
@@ -1276,7 +1277,6 @@ function exportReportExcel() {
 /* ══════════ ROLE-BASED ACCESS ══════════ */
 // role: null | 'viewer' | 'assistant' | 'admin'
 // currentUser נקבע ע"י initAuth() למנהל. לעוזר/צופה — sessionStorage
-let sessionRole = sessionStorage.getItem('session_role') || null; // 'viewer' | 'assistant'
 let pendingAction = null;
 
 function effectiveRole() {
