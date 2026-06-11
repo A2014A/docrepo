@@ -1,3 +1,4 @@
+SHA: 2dd83ef8b1b0acb07eadf5334122f75fc7c8941b
 const express  = require('express');
 const cors     = require('cors');
 const path     = require('path');
@@ -155,12 +156,14 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), async (req, res
       const supplier = row[3] ? String(row[3]).trim() : '';
       const tipusRaw = row[4] ? String(row[4]).trim() : '';
       const tipus    = tipusRaw === 'P' ? 'יצור' : tipusRaw === 'R' ? 'רכש' : tipusRaw;
-      const responsible = row[5] ? String(row[5]).trim() : '';
-      const kashrus  = row[6] ? String(row[6]).trim() : '';
-      const pesach   = row[7] && row[7] !== '#N/A' ? String(row[7]).trim() : '';
+      const sourceRaw = row[5] ? String(row[5]).trim() : '';
+      const source   = sourceRaw;
+      const responsible = row[6] ? String(row[6]).trim() : '';
+      const kashrus  = row[7] ? String(row[7]).trim() : '';
+      const pesach   = row[8] && row[8] !== '#N/A' ? String(row[8]).trim() : '';
       if (!id || !name || id === 'undefined') continue;
       const existing = db.get('skus').find({ id }).value();
-      const data = { id, name, supplier, tipus, responsible, kashrus, pesach };
+      const data = { id, name, supplier, tipus, source, responsible, kashrus, pesach };
       if (existing) {
         db.get('skus').find({ id }).assign(data).write();
         updated++;
@@ -408,3 +411,4 @@ ${skuList}
     res.status(500).json({ error: e.message });
   }
 });
+
