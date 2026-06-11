@@ -676,10 +676,6 @@ async function skuSearch(mode, idx) {
 }
 
 function addSku(mode, idx, sku) {
-  const dropId  = mode==='edit' ? 'editSkuDropdown' : `fskudrop_${idx}`;
-  const inputId = mode==='edit' ? 'editSkuSearch'   : `fskusearch_${idx}`;
-  document.getElementById(dropId).style.display='none';
-  document.getElementById(inputId).value='';
   if (mode==='edit') {
     if (!editSkus.find(s=>s.id===sku.id)) { editSkus.push(sku); renderSkuPills('edit'); }
   } else {
@@ -723,7 +719,6 @@ async function openEdit(id){
   document.getElementById('editProd').value=d.production_date||'';
   document.getElementById('editExpiry').value=d.expiry_date||'';
   document.getElementById('editAlert').innerHTML='';
-  document.getElementById('editSkuSearch').value='';
   renderEditPills();renderSkuPills('edit');
   document.getElementById('editModal').classList.add('open');
 }
