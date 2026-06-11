@@ -398,6 +398,9 @@ function renderCard(d,i){
     ${(d.skus||[]).length?`<div class="doc-skus">${d.skus.map(s=>`<span class="sku-pill" style="font-size:.72rem">${s.id} — ${s.name.length>24?s.name.slice(0,24)+'…':s.name}</span>`).join('')}</div>`:''}
     ${isAdm&&d.expiry_date?`<div style="margin-top:5px">${expiryBadge(d.expiry_date)}</div>`:''}
     <div class="doc-card-footer">
+      ${canPreview(d.ext)?`<button class="dl-btn" onclick="openViewer(${d.id},'${d.ext}','${d.name.replace(/'/g,"\\'")}')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>צפה
+      </button>`:''}
       <a class="dl-btn" href="/api/docs/${d.id}/download" download>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
       </a>
@@ -1132,6 +1135,40 @@ function renderSkuDocs() {
     </table>`;
 }
 
+
+/* ══════════ DOCUMENT VIEWER ══════════ */
+function canPreview(ext) {
+  return ['pdf','jpg','jpeg','png','gif','webp','doc','docx','xls','xlsx','ppt','pptx'].includes((ext||'').toLowerCase());
+}
+
+function openViewer(id, ext, name) {
+  const url = `/api/docs/${id}/download`;
+  const googleViewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(window.location.origin + url)}&embedded=true`;
+  document.getElementById('viewerTitle').textContent = name;
+  document.getElementById('viewerDownload').href = url;
+  const body = document.getElementById('viewerBody');
+  const e = ext.toLowerCase();
+
+  if (e === 'pdf') {
+    body.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none"></iframe>`;
+  } else if (['jpg','jpeg','png','gif','webp'].includes(e)) {
+    body.innerHTML = `<img src="${url}" style="max-width:100%;max-height:100%;object-fit:contain;padding:1rem" alt="${name}"/>`;
+  } else if (['doc','docx','xls','xlsx','ppt','pptx'].includes(e)) {
+    body.innerHTML = `<iframe src="${googleViewerUrl}" style="width:100%;height:100%;border:none"></iframe>`;
+  } else {
+    body.innerHTML = `<div style="text-align:center;color:var(--ink3);padding:3rem">
+      <p style="font-size:1rem;margin-bottom:1rem">לא ניתן להציג קובץ מסוג זה</p>
+      <a href="${url}" download class="btn btn-accent">הורד קובץ</a>
+    </div>`;
+  }
+  document.getElementById('viewerModal').classList.add('open');
+}
+
+function closeViewer() {
+  document.getElementById('viewerModal').classList.remove('open');
+  document.getElementById('viewerBody').innerHTML = '';
+}
+
 </script>
 
 <!-- SKU DOCS MODAL -->
@@ -1171,6 +1208,22 @@ function renderSkuDocs() {
     </div>
     <div id="skuDocsCount" style="font-size:.82rem;color:var(--ink3);margin-bottom:10px"></div>
     <div style="max-height:420px;overflow-y:auto" id="skuDocsList"></div>
+  </div>
+</div>
+
+<!-- DOCUMENT VIEWER MODAL -->
+<div class="modal-bg" id="viewerModal" style="padding:.5rem">
+  <div class="modal" style="max-width:960px;width:98vw;height:90vh;display:flex;flex-direction:column;padding:0">
+    <div class="modal-header" style="padding:1rem 1.25rem;border-bottom:1px solid var(--border);flex-shrink:0">
+      <div class="modal-title" id="viewerTitle" style="font-size:1rem"></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <a id="viewerDownload" class="btn btn-outline" style="font-size:.8rem;padding:6px 14px" download>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
+        </a>
+        <button class="modal-close" onclick="closeViewer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div id="viewerBody" style="flex:1;overflow:hidden;background:#f0f0f0;display:flex;align-items:center;justify-content:center"></div>
   </div>
 </div>
 </body>
