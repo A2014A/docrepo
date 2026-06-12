@@ -205,24 +205,25 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), async (req, res
     let added = 0, updated = 0;
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      const id       = row[0] ? String(row[0]).trim() : '';
-      const name     = row[1] ? String(row[1]).trim() : '';
-      const supplier = row[3] ? String(row[3]).trim() : '';
-      const tipusRaw = row[4] ? String(row[4]).trim() : '';
-      const tipus    = tipusRaw === 'P' ? 'יצור' : tipusRaw === 'R' ? 'רכש' : tipusRaw;
-      const sourceRaw = row[5] ? String(row[5]).trim() : '';
-      const source   = sourceRaw;
-      const responsible = row[6] ? String(row[6]).trim() : '';
-      const kashrus  = row[7] ? String(row[7]).trim() : '';
-      const pesach   = row[8] && row[8] !== '#N/A' ? String(row[8]).trim() : '';
+      const id           = row[0] ? String(row[0]).trim() : '';
+      const name         = row[1] ? String(row[1]).trim() : '';
+      const tipusRaw     = row[2] ? String(row[2]).trim() : '';
+      const tipus        = tipusRaw === 'P' ? 'יצור' : tipusRaw === 'R' ? 'רכש' : tipusRaw;
+      const source       = row[3] ? String(row[3]).trim() : '';
+      const responsible  = row[4] ? String(row[4]).trim() : '';
+      const supplier2    = row[5] ? String(row[5]).trim() : '';
+      const supplier     = row[6] ? String(row[6]).trim() : '';
+      const kashrus      = row[7] ? String(row[7]).trim() : '';
+      const pesach       = row[8] && row[8] !== '#N/A' ? String(row[8]).trim() : '';
+      const notes        = row[9] ? String(row[9]).trim() : '';
       if (!id || !name || id === 'undefined') continue;
       const existing = db.get('skus').find({ id }).value();
-      const data = { id, name, supplier, tipus, source, responsible, kashrus, pesach };
+      const data = { id, name, supplier, supplier2, tipus, source, responsible, kashrus, pesach, notes };
       if (existing) {
         db.get('skus').find({ id }).assign(data).write();
         updated++;
       } else {
-        db.get('skus').push({ ...data, source: '', notes: '' }).write();
+        db.get('skus').push(data).write();
         added++;
       }
     }
@@ -239,7 +240,7 @@ app.get('/api/skus/report', requireAuth, (req, res) => {
   const docs = db.get('documents').value();
   const report = skus.map(s => {
     const linked = docs.filter(d => (d.skus||[]).some(ds => ds.id === s.id));
-    return { ...s, doc_count: linked.length, docs: linked.map(d => ({ id: d.id, name: d.name, doctype: d.doctype||'', expiry_date: d.expiry_date||'', production_date: d.production_date||'', size_label: d.size_label||'', ext: d.ext||'' })) };
+    return { ...s, supplier2: s.supplier2||'', notes: s.notes||'', doc_count: linked.length, docs: linked.map(d => ({ id: d.id, name: d.name, doctype: d.doctype||'', expiry_date: d.expiry_date||'', production_date: d.production_date||'', size_label: d.size_label||'', ext: d.ext||'' })) };
   });
   res.json(report);
 });
