@@ -835,7 +835,7 @@ initAuth();loadStats();loadTags();loadDocs();
     <div id="skuPaneList">
       <!-- סינונים -->
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-        <input type="text" class="form-input" id="skuListSearch" placeholder="חפש מקט / שם / ספק..." oninput="loadSkuList()" style="flex:2;min-width:140px"/>
+        <input type="text" class="form-input" id="skuListSearch" placeholder="חפש לפי מקט / שם / ספק / כשרות / הערות..." oninput="loadSkuList()" style="flex:2;min-width:140px"/>
         <select class="form-select" id="skuFilterTipus" onchange="loadSkuList()" style="flex:1;min-width:100px">
           <option value="">כל הטיפוסים</option>
           <option value="רכש">רכש</option>
@@ -1095,7 +1095,7 @@ function renderReport(){
   if(reportFilter==='has')data=data.filter(s=>s.doc_count>0);
   if(fTipus) data=data.filter(s=>s.tipus===fTipus);
   if(fSource)data=data.filter(s=>s.source===fSource);
-  if(q)data=data.filter(s=>s.id.includes(q)||s.name.toLowerCase().includes(q)||(s.supplier||'').toLowerCase().includes(q));
+  if(q)data=data.filter(s=>s.id.includes(q)||s.name.toLowerCase().includes(q)||(s.supplier||'').toLowerCase().includes(q)||(s.supplier2||'').toLowerCase().includes(q)||(s.responsible||'').toLowerCase().includes(q)||(s.source||'').toLowerCase().includes(q)||(s.tipus||'').toLowerCase().includes(q)||(s.kashrus||'').toLowerCase().includes(q)||(s.pesach||'').toLowerCase().includes(q)||(s.notes||'').toLowerCase().includes(q));
   const missing=data.filter(s=>s.doc_count===0).length;
   document.getElementById('reportSummary').textContent=`מוצג: ${data.length} | יש מסמך: ${data.filter(s=>s.doc_count>0).length} | חסר: ${missing}`;
   document.getElementById('reportTable').innerHTML=`
@@ -1267,7 +1267,7 @@ function exportReportExcel() {
   if(reportFilter==='has')data=data.filter(s=>s.doc_count>0);
   if(fTipus) data=data.filter(s=>s.tipus===fTipus);
   if(fSource)data=data.filter(s=>s.source===fSource);
-  if(q)data=data.filter(s=>s.id.includes(q)||s.name.toLowerCase().includes(q)||(s.supplier||'').toLowerCase().includes(q));
+  if(q)data=data.filter(s=>s.id.includes(q)||s.name.toLowerCase().includes(q)||(s.supplier||'').toLowerCase().includes(q)||(s.supplier2||'').toLowerCase().includes(q)||(s.responsible||'').toLowerCase().includes(q)||(s.source||'').toLowerCase().includes(q)||(s.tipus||'').toLowerCase().includes(q)||(s.kashrus||'').toLowerCase().includes(q)||(s.pesach||'').toLowerCase().includes(q)||(s.notes||'').toLowerCase().includes(q));
 
   if(!data.length){showToast('אין נתונים לייצוא');return;}
 
@@ -1944,7 +1944,7 @@ async function aiIdentifyEdit() {
 
     <!-- סינונים -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-      <input type="text" class="form-input" id="spSearch" placeholder="חפש מקט / שם / ספק..." oninput="renderSkuPicker()" style="flex:2;min-width:140px"/>
+      <input type="text" class="form-input" id="spSearch" placeholder="חפש לפי מקט / שם / ספק / כשרות / הערות..." oninput="renderSkuPicker()" style="flex:2;min-width:140px"/>
       <select class="form-select" id="spFilterSupplier" onchange="renderSkuPicker()" style="flex:1;min-width:110px">
         <option value="">כל הספקים</option>
       </select>
