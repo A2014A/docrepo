@@ -847,7 +847,7 @@ initAuth();loadStats();loadTags();loadDocs();
           <option value="רכש מקומי">רכש מקומי</option>
         </select>
         <select class="form-select" id="skuFilterResp" onchange="loadSkuList()" style="flex:1;min-width:100px">
-          <option value="">כל האחראים</option>
+          <option value="">כל איש רכש</option>
         </select>
       </div>
       <div id="skuListAlert"></div>
@@ -999,8 +999,10 @@ async function loadSkuList(){
   const filterTipus=document.getElementById('skuFilterTipus').value;
   const filterSource=document.getElementById('skuFilterSource').value;
   let skus=await apiFetch('/api/skus?all=1'+(q?'&q='+encodeURIComponent(q):''));
+  const filterResp=document.getElementById('skuFilterResp').value;
   if(filterTipus)  skus=skus.filter(s=>s.tipus===filterTipus);
   if(filterSource) skus=skus.filter(s=>s.source===filterSource);
+  if(filterResp)   skus=skus.filter(s=>s.responsible===filterResp);
   skuManagerData=skus;
   document.getElementById('skuTableBody').innerHTML=skus.map(s=>`
     <tr style="border-bottom:1px solid var(--border1)" id="skurow_${s.id}">
@@ -1020,6 +1022,11 @@ async function loadSkuList(){
       </td>
     </tr>`).join('');
   document.getElementById('skuListCount').textContent=`סה"כ: ${skus.length} מקטים`;
+  // עדכן select איש רכש
+  const respSel=document.getElementById('skuFilterResp');
+  const curResp=respSel.value;
+  const allResps=[...new Set(skuManagerData.map(s=>s.responsible||'').filter(Boolean))].sort();
+  respSel.innerHTML='<option value="">כל איש רכש</option>'+allResps.map(r=>`<option value="${r}"${r===curResp?' selected':''}>${r}</option>`).join('');
 }
 
 function startEditSku(id){
