@@ -11,16 +11,18 @@ const FileSync = require('lowdb/adapters/FileSync');
 const PORT       = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'docrepo_secret_change_in_prod';
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
-const DATA_DIR    = process.env.RENDER ? path.join(__dirname, 'uploads', '_data') : path.join(__dirname, 'data');
+const DATA_DIR    = path.join(__dirname, 'uploads', '_data');
 
 [UPLOADS_DIR, DATA_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
 const dbPath = path.join(DATA_DIR, 'db.json');
-// אם הדיסק ריק — העתק את ה-db המקורי
+// אם db לא קיים — העתק מ-data/db.json
 const fallbackDbPath = path.join(__dirname, 'data', 'db.json');
-if (!fs.existsSync(dbPath) && fs.existsSync(fallbackDbPath)) {
-  fs.copyFileSync(fallbackDbPath, dbPath);
-  console.log('db.json הועתק מ-data לדיסק הקבוע');
+if (!fs.existsSync(dbPath)) {
+  if (fs.existsSync(fallbackDbPath)) {
+    fs.copyFileSync(fallbackDbPath, dbPath);
+    console.log('db.json הועתק לדיסק הקבוע');
+  }
 }
 const db = low(new FileSync(dbPath));
 db.defaults({ users: [], documents: [], skus: [], nextDocId: 1, nextUserId: 1, view_code: '1234', assistant_code: '5678', viewer_code: '0000' }).write();
