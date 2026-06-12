@@ -846,9 +846,19 @@ initAuth();loadStats();loadTags();loadDocs();
           <option value="יבוא">יבוא</option>
           <option value="רכש מקומי">רכש מקומי</option>
         </select>
-        <select class="form-select" id="skuFilterResp" onchange="loadSkuList()" style="flex:1;min-width:100px">
-          <option value="">כל איש רכש</option>
-        </select>
+        <div style="position:relative;flex:1;min-width:120px" id="respDropdownWrap">
+          <button type="button" id="respDropdownBtn" onclick="toggleRespDropdown()"
+            style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:6px;background:var(--bg1);cursor:pointer;text-align:right;font-size:.85rem;display:flex;justify-content:space-between;align-items:center">
+            <span id="respDropdownLabel">כל איש רכש</span>
+            <span>▾</span>
+          </button>
+          <div id="respDropdownMenu" style="display:none;position:absolute;top:100%;right:0;left:0;background:var(--bg1);border:1px solid var(--border2);border-radius:6px;max-height:200px;overflow-y:auto;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.15)">
+            <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border1)">
+              <input type="checkbox" id="respAll" checked onchange="respAllToggle(this)"/> הכל
+            </label>
+            <div id="respCheckboxes"></div>
+          </div>
+        </div>
       </div>
       <div id="skuListAlert"></div>
       <div style="max-height:400px;overflow-y:auto">
@@ -994,15 +1004,42 @@ function skuTab(t){
   if(t==='report')loadReport();
 }
 
+
+/* ══ RESP MULTI-SELECT ══ */
+function toggleRespDropdown(){
+  const m=document.getElementById('respDropdownMenu');
+  m.style.display=m.style.display==='none'?'block':'none';
+}
+document.addEventListener('click',function(e){
+  const w=document.getElementById('respDropdownWrap');
+  if(w && !w.contains(e.target)) document.getElementById('respDropdownMenu').style.display='none';
+});
+function getSelectedResps(){
+  return [...document.querySelectorAll('.resp-cb:checked')].map(c=>c.value);
+}
+function updateRespLabel(){
+  const sel=getSelectedResps();
+  const lbl=document.getElementById('respDropdownLabel');
+  if(!lbl)return;
+  const allCb=document.getElementById('respAll');
+  if(sel.length===0){lbl.textContent='כל איש רכש';if(allCb)allCb.checked=true;}
+  else{lbl.textContent=sel.length===1?sel[0]:sel.length+' נבחרו';if(allCb)allCb.checked=false;}
+}
+function onRespChange(){updateRespLabel();loadSkuList();}
+function respAllToggle(cb){
+  document.querySelectorAll('.resp-cb').forEach(c=>c.checked=false);
+  updateRespLabel();loadSkuList();
+}
+
 async function loadSkuList(){
   const q=document.getElementById('skuListSearch').value.trim();
   const filterTipus=document.getElementById('skuFilterTipus').value;
   const filterSource=document.getElementById('skuFilterSource').value;
   let skus=await apiFetch('/api/skus?all=1'+(q?'&q='+encodeURIComponent(q):''));
-  const filterResp=document.getElementById('skuFilterResp').value;
+  const selectedResps=getSelectedResps();
   if(filterTipus)  skus=skus.filter(s=>s.tipus===filterTipus);
   if(filterSource) skus=skus.filter(s=>s.source===filterSource);
-  if(filterResp)   skus=skus.filter(s=>s.responsible===filterResp);
+  if(selectedResps.length>0) skus=skus.filter(s=>selectedResps.includes(s.responsible||''));
   skuManagerData=skus;
   document.getElementById('skuTableBody').innerHTML=skus.map(s=>`
     <tr style="border-bottom:1px solid var(--border1)" id="skurow_${s.id}">
@@ -1022,11 +1059,13 @@ async function loadSkuList(){
       </td>
     </tr>`).join('');
   document.getElementById('skuListCount').textContent=`סה"כ: ${skus.length} מקטים`;
-  // עדכן select איש רכש
-  const respSel=document.getElementById('skuFilterResp');
-  const curResp=respSel.value;
+  // עדכן checkboxes איש רכש
   const allResps=[...new Set(skuManagerData.map(s=>s.responsible||'').filter(Boolean))].sort();
-  respSel.innerHTML='<option value="">כל איש רכש</option>'+allResps.map(r=>`<option value="${r}"${r===curResp?' selected':''}>${r}</option>`).join('');
+  const box=document.getElementById('respCheckboxes');
+  if(box){
+    const cur=getSelectedResps();
+    box.innerHTML=allResps.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--border1)"><input type="checkbox" class="resp-cb" value="${r}" ${cur.includes(r)?'checked':''} onchange="onRespChange()"/> ${r}</label>`).join('');
+  }
 }
 
 function startEditSku(id){
