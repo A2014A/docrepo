@@ -455,7 +455,7 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'מפתח API חסר' });
     const skus = db.get('skus').value().slice(0, 800);
-    const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
+    const skuList = skus.map(s => `${s.id}: ${s.name}${s.supplier?' | ספק: '+s.supplier:''}${s.supplier2?' / '+s.supplier2:''}${s.kashrus?' | כשרות: '+s.kashrus:''}${s.source?' | מקור: '+s.source:''}`).join('\n');
     const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
 
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
@@ -467,7 +467,7 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
   "description": "אם יש תאריך יצור — כתוב: תאריך יצור: YYYY-MM-DD. אם יש תאריך תוקף — כתוב: תוקף עד: YYYY-MM-DD. אם שניהם — כתוב שניהם מופרדים בפסיק. אם אין — השאר ריק",
   "kashrus": "שם הגוף המכשיר הנקוב בתעודה — לדוגמה: עדה חרדית / בית יוסף / הרב לנדא / OU / בד\"ץ קהילות / חתם סופר ב\"ב. אם לא מצוין — null",
   "pesach": "אם התעודה מתייחסת לפסח — ציין את הכשרות לפסח. אם לא — null",
-  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך. חפש התאמות לפי: שם מוצר, שם יצרן, ספק, מקט מפורש. כלול כל מקט רלוונטי — אין הגבלה על מספר"]
+  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למסמך. חפש התאמות לפי: שם מוצר, שם יצרן, שם ספק (ספק 1 וספק 2), כשרות, מקור. כלול כל מקט רלוונטי — אין הגבלה על מספר"]
 }
 רשימת המקטים: ${skuList}
 ענה רק ב-JSON.`;
@@ -548,7 +548,7 @@ app.post('/api/identify', requireAssistant, upload.single('file'), async (req, r
     const ext = path.extname(req.file.originalname).toLowerCase();
     // קבל רשימת שמות מקטים לחיפוש
     const skus = db.get('skus').value().slice(0, 800);
-    const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
+    const skuList = skus.map(s => `${s.id}: ${s.name}${s.supplier?' | ספק: '+s.supplier:''}${s.supplier2?' / '+s.supplier2:''}${s.kashrus?' | כשרות: '+s.kashrus:''}${s.source?' | מקור: '+s.source:''}`).join('\n');
     const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
 
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
@@ -560,7 +560,7 @@ app.post('/api/identify', requireAssistant, upload.single('file'), async (req, r
   "description": "אם יש תאריך יצור — כתוב: תאריך יצור: YYYY-MM-DD. אם יש תאריך תוקף — כתוב: תוקף עד: YYYY-MM-DD. אם שניהם — כתוב שניהם מופרדים בפסיק. אם אין — השאר ריק",
   "kashrus": "שם הגוף המכשיר הנקוב בתעודה — לדוגמה: עדה חרדית / בית יוסף / הרב לנדא / OU / בד\"ץ קהילות / חתם סופר ב\"ב. אם לא מצוין — null",
   "pesach": "אם התעודה מתייחסת לפסח — ציין את הכשרות לפסח. אם לא — null",
-  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך. חפש התאמות לפי: שם מוצר, שם יצרן, ספק, מקט מפורש. כלול כל מקט רלוונטי — אין הגבלה על מספר"]
+  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למסמך. חפש התאמות לפי: שם מוצר, שם יצרן, שם ספק (ספק 1 וספק 2), כשרות, מקור. כלול כל מקט רלוונטי — אין הגבלה על מספר"]
 }
 
 הנחיות: המר תאריכים מ-DD/MM/YYYY או MM/DD/YYYY לפורמט YYYY-MM-DD.
