@@ -291,7 +291,7 @@ app.get('/api/docs', (req, res) => {
       (d.description||'').toLowerCase().includes(lq) ||
       (d.tags||[]).some(t => t.toLowerCase().includes(lq)) ||
       (d.doctype||'').includes(lq) ||
-      (d.skus||[]).some(s => s.id === q || s.name.toLowerCase().includes(lq))
+      (d.skus||[]).some(s => s.id.includes(q) || s.name.toLowerCase().includes(lq))
     );
   }
   const sortFns = {
@@ -455,19 +455,17 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'מפתח API חסר' });
     const skus = db.get('skus').value().slice(0, 800);
-    const skuList = skus.map(s => `${s.id}: ${s.name}${s.supplier?' | ספק: '+s.supplier:''}${s.supplier2?' / '+s.supplier2:''}${s.kashrus?' | כשרות: '+s.kashrus:''}${s.source?' | מקור: '+s.source:''}`).join('\n');
+    const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
     const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
 
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
 {
   "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
-  "name": "שם המוצר הנקוב במסמך + שם היצרן/ספק. פורמט: [שם מוצר] - [שם יצרן]. לדוגמה: שמן זית כתית - Oleificio Zucchi. אם אין שם מוצר ברור — כתוב שם היצרן בלבד",
-  "expiry_date": "תאריך תוקף הכשרות/התעודה (Valid Until / Kosher Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. זהו התאריך שבו פוקעת תעודת הכשרות. אם לא מופיע — null",
-  "production_date": "תאריך הנפקת/הוצאת התעודה (Date of Issue / Issued / Certificate Date / תאריך הנפקה / Date) בפורמט YYYY-MM-DD. זהו התאריך שבו הוצאה התעודה. אם לא מופיע — null",
-  "description": "תאריכים הקשורים למוצר עצמו (לא לתעודה): אם יש תאריך ייצור מוצר — כתוב: תאריך ייצור מוצר: YYYY-MM-DD. אם יש תאריך תפוגת מוצר — כתוב: תוקף מוצר: YYYY-MM-DD. אם שניהם — כתוב שניהם מופרדים בפסיק. אם אין תאריכי מוצר נפרדים — השאר ריק",
-  "kashrus": "שם הגוף המכשיר הנקוב בתעודה — לדוגמה: עדה חרדית / בית יוסף / הרב לנדא / OU / בד\"ץ קהילות / חתם סופר ב\"ב. אם לא מצוין — null",
-  "pesach": "אם התעודה מתייחסת לפסח — ציין את הכשרות לפסח. אם לא — null",
-  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למסמך. חפש התאמות לפי: שם מוצר, שם יצרן, שם ספק (ספק 1 וספק 2), כשרות, מקור. כלול כל מקט רלוונטי — אין הגבלה על מספר"]
+  "name": "שם קצר ומתאר של המסמך בעברית",
+  "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
+  "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה) בפורמט YYYY-MM-DD. אם לא מופיע — null",
+  "description": "תיאור קצר של המסמך בעברית — כולל שם היצרן אם מופיע",
+  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
 }
 רשימת המקטים: ${skuList}
 ענה רק ב-JSON.`;
@@ -478,7 +476,7 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
 
     const body = {
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2048,
+      max_tokens: 1024,
       messages: [{ role: 'user', content: [contentBlock, { type: 'text', text: prompt }] }]
     };
     const headers = { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
@@ -548,19 +546,17 @@ app.post('/api/identify', requireAssistant, upload.single('file'), async (req, r
     const ext = path.extname(req.file.originalname).toLowerCase();
     // קבל רשימת שמות מקטים לחיפוש
     const skus = db.get('skus').value().slice(0, 800);
-    const skuList = skus.map(s => `${s.id}: ${s.name}${s.supplier?' | ספק: '+s.supplier:''}${s.supplier2?' / '+s.supplier2:''}${s.kashrus?' | כשרות: '+s.kashrus:''}${s.source?' | מקור: '+s.source:''}`).join('\n');
+    const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
     const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
 
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
 {
   "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
-  "name": "שם המוצר הנקוב במסמך + שם היצרן/ספק. פורמט: [שם מוצר] - [שם יצרן]. לדוגמה: שמן זית כתית - Oleificio Zucchi. אם אין שם מוצר ברור — כתוב שם היצרן בלבד",
-  "expiry_date": "תאריך תוקף הכשרות/התעודה (Valid Until / Kosher Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. זהו התאריך שבו פוקעת תעודת הכשרות. אם לא מופיע — null",
+  "name": "שם קצר ומתאר של המסמך בעברית",
+  "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
   "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה / Manufactured) בפורמט YYYY-MM-DD. אם לא מופיע — null",
-  "description": "תאריכים הקשורים למוצר עצמו (לא לתעודה): אם יש תאריך ייצור מוצר — כתוב: תאריך ייצור מוצר: YYYY-MM-DD. אם יש תאריך תפוגת מוצר — כתוב: תוקף מוצר: YYYY-MM-DD. אם שניהם — כתוב שניהם מופרדים בפסיק. אם אין תאריכי מוצר נפרדים — השאר ריק",
-  "kashrus": "שם הגוף המכשיר הנקוב בתעודה — לדוגמה: עדה חרדית / בית יוסף / הרב לנדא / OU / בד\"ץ קהילות / חתם סופר ב\"ב. אם לא מצוין — null",
-  "pesach": "אם התעודה מתייחסת לפסח — ציין את הכשרות לפסח. אם לא — null",
-  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למסמך. חפש התאמות לפי: שם מוצר, שם יצרן, שם ספק (ספק 1 וספק 2), כשרות, מקור. כלול כל מקט רלוונטי — אין הגבלה על מספר"]
+  "description": "תיאור קצר של המסמך בעברית — כולל שם היצרן אם מופיע",
+  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
 }
 
 הנחיות: המר תאריכים מ-DD/MM/YYYY או MM/DD/YYYY לפורמט YYYY-MM-DD.
@@ -570,7 +566,7 @@ ${skuList}
 ענה רק ב-JSON, ללא הסברים נוספים.`;
     const body = {
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2048,
+      max_tokens: 1024,
       messages: [{
         role: 'user',
         content: [
