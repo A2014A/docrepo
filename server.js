@@ -465,7 +465,9 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
   "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
   "production_date": "תאריך הנפקת התעודה (Date of Issue / Issued / Certificate Date / תאריך הנפקה) בפורמט YYYY-MM-DD. אם לא מופיע — null",
   "description": "אם יש תאריך יצור — כתוב: תאריך יצור: YYYY-MM-DD. אם יש תאריך תוקף — כתוב: תוקף עד: YYYY-MM-DD. אם שניהם — כתוב שניהם מופרדים בפסיק. אם אין — השאר ריק",
-  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
+  "kashrus": "שם הגוף המכשיר הנקוב בתעודה — לדוגמה: עדה חרדית / בית יוסף / הרב לנדא / OU / בד\"ץ קהילות / חתם סופר ב\"ב. אם לא מצוין — null",
+  "pesach": "אם התעודה מתייחסת לפסח — ציין את הכשרות לפסח. אם לא — null",
+  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך. חפש התאמות לפי: שם מוצר, שם יצרן, ספק, מקט מפורש. כלול כל מקט רלוונטי — אין הגבלה על מספר"]
 }
 רשימת המקטים: ${skuList}
 ענה רק ב-JSON.`;
@@ -476,7 +478,7 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
 
     const body = {
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 2048,
       messages: [{ role: 'user', content: [contentBlock, { type: 'text', text: prompt }] }]
     };
     const headers = { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
@@ -556,7 +558,9 @@ app.post('/api/identify', requireAssistant, upload.single('file'), async (req, r
   "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
   "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה / Manufactured) בפורמט YYYY-MM-DD. אם לא מופיע — null",
   "description": "אם יש תאריך יצור — כתוב: תאריך יצור: YYYY-MM-DD. אם יש תאריך תוקף — כתוב: תוקף עד: YYYY-MM-DD. אם שניהם — כתוב שניהם מופרדים בפסיק. אם אין — השאר ריק",
-  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
+  "kashrus": "שם הגוף המכשיר הנקוב בתעודה — לדוגמה: עדה חרדית / בית יוסף / הרב לנדא / OU / בד\"ץ קהילות / חתם סופר ב\"ב. אם לא מצוין — null",
+  "pesach": "אם התעודה מתייחסת לפסח — ציין את הכשרות לפסח. אם לא — null",
+  "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך. חפש התאמות לפי: שם מוצר, שם יצרן, ספק, מקט מפורש. כלול כל מקט רלוונטי — אין הגבלה על מספר"]
 }
 
 הנחיות: המר תאריכים מ-DD/MM/YYYY או MM/DD/YYYY לפורמט YYYY-MM-DD.
@@ -566,7 +570,7 @@ ${skuList}
 ענה רק ב-JSON, ללא הסברים נוספים.`;
     const body = {
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 2048,
       messages: [{
         role: 'user',
         content: [
