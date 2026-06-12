@@ -511,6 +511,22 @@ app.get('/api/restore-db', (req, res) => {
   res.json({ ok: true, msg: 'db.json הועתק בהצלחה — רענן את הדף' });
 });
 
+
+/* ── BACKUP DB (לגיבוי ה-db הנוכחי מהדיסק) ── */
+app.get('/api/backup-db', (req, res) => {
+  const target = path.join(DATA_DIR, 'db.json');
+  if (!fs.existsSync(target)) return res.json({ ok: false, msg: 'db.json לא נמצא על הדיסק' });
+  const content = fs.readFileSync(target, 'utf-8');
+  const db_data = JSON.parse(content);
+  res.json({ 
+    ok: true, 
+    documents: db_data.documents?.length || 0,
+    skus: db_data.skus?.length || 0,
+    users: db_data.users?.length || 0,
+    data: db_data
+  });
+});
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
 
 app.listen(PORT, () => {
