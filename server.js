@@ -15,7 +15,14 @@ const DATA_DIR    = process.env.RENDER ? path.join(__dirname, 'uploads', '_data'
 
 [UPLOADS_DIR, DATA_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
-const db = low(new FileSync(path.join(DATA_DIR, 'db.json')));
+const dbPath = path.join(DATA_DIR, 'db.json');
+// אם הדיסק ריק — העתק את ה-db המקורי
+const fallbackDbPath = path.join(__dirname, 'data', 'db.json');
+if (!fs.existsSync(dbPath) && fs.existsSync(fallbackDbPath)) {
+  fs.copyFileSync(fallbackDbPath, dbPath);
+  console.log('db.json הועתק מ-data לדיסק הקבוע');
+}
+const db = low(new FileSync(dbPath));
 db.defaults({ users: [], documents: [], skus: [], nextDocId: 1, nextUserId: 1, view_code: '1234', assistant_code: '5678', viewer_code: '0000' }).write();
 // וודא שדות קודים קיימים ב-db ישן
 if (!db.get('assistant_code').value()) db.set('assistant_code', '5678').write();
