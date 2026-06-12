@@ -500,6 +500,16 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
   }
 });
 
+
+/* ── RESTORE DB FROM GITHUB COPY (חד פעמי) ── */
+app.get('/api/restore-db', (req, res) => {
+  const fallback = path.join(__dirname, 'data', 'db.json');
+  const target   = path.join(DATA_DIR, 'db.json');
+  if (!fs.existsSync(fallback)) return res.json({ ok: false, msg: 'fallback לא נמצא' });
+  fs.copyFileSync(fallback, target);
+  res.json({ ok: true, msg: 'db.json הועתק בהצלחה — רענן את הדף' });
+});
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
 
 app.listen(PORT, () => {
