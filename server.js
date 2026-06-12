@@ -461,10 +461,10 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
 {
   "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
-  "name": "שם קצר ומתאר של המסמך בעברית",
+  "name": "שם המוצר הנקוב במסמך + שם היצרן/ספק. פורמט: [שם מוצר] - [שם יצרן]. לדוגמה: שמן זית כתית - Oleificio Zucchi. אם אין שם מוצר ברור — כתוב שם היצרן בלבד",
   "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
-  "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה) בפורמט YYYY-MM-DD. אם לא מופיע — null",
-  "description": "תיאור קצר של המסמך בעברית — כולל שם היצרן אם מופיע",
+  "production_date": "תאריך הנפקת התעודה (Date of Issue / Issued / Certificate Date / תאריך הנפקה) בפורמט YYYY-MM-DD. אם לא מופיע — null",
+  "description": "אם יש תאריך יצור — כתוב: תאריך יצור: YYYY-MM-DD. אם יש תאריך תוקף — כתוב: תוקף עד: YYYY-MM-DD. אם שניהם — כתוב שניהם מופרדים בפסיק. אם אין — השאר ריק",
   "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
 }
 רשימת המקטים: ${skuList}
@@ -552,10 +552,10 @@ app.post('/api/identify', requireAssistant, upload.single('file'), async (req, r
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
 {
   "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
-  "name": "שם קצר ומתאר של המסמך בעברית",
+  "name": "שם המוצר הנקוב במסמך + שם היצרן/ספק. פורמט: [שם מוצר] - [שם יצרן]. לדוגמה: שמן זית כתית - Oleificio Zucchi. אם אין שם מוצר ברור — כתוב שם היצרן בלבד",
   "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
   "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה / Manufactured) בפורמט YYYY-MM-DD. אם לא מופיע — null",
-  "description": "תיאור קצר של המסמך בעברית — כולל שם היצרן אם מופיע",
+  "description": "אם יש תאריך יצור — כתוב: תאריך יצור: YYYY-MM-DD. אם יש תאריך תוקף — כתוב: תוקף עד: YYYY-MM-DD. אם שניהם — כתוב שניהם מופרדים בפסיק. אם אין — השאר ריק",
   "suggested_skus": ["מספרי מקטים מהרשימה שתואמים למוצרים במסמך — עד 5 מקטים"]
 }
 
