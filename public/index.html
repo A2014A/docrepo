@@ -856,12 +856,14 @@ initAuth();loadStats();loadTags();loadDocs();
           <thead><tr style="background:var(--bg2);position:sticky;top:0;z-index:1">
             <th style="padding:7px 6px;text-align:right;border-bottom:1px solid var(--border2);white-space:nowrap">מקט</th>
             <th style="padding:7px 6px;text-align:right;border-bottom:1px solid var(--border2)">שם מוצר</th>
-            <th style="padding:7px 6px;text-align:right;border-bottom:1px solid var(--border2)">ספק</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">טיפוס</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">מקור</th>
-            <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">אחראי</th>
+            <th style="padding:7px 6px;text-align:right;border-bottom:1px solid var(--border2)">ספק 1</th>
+            <th style="padding:7px 6px;text-align:right;border-bottom:1px solid var(--border2)">ספק 2</th>
+            <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">איש רכש</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">כשרות</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">פסח</th>
+            <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">הערות</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">פעולות</th>
           </tr></thead>
           <tbody id="skuTableBody"></tbody>
@@ -891,9 +893,11 @@ initAuth();loadStats();loadTags();loadDocs();
             <option value="רכש מקומי">רכש מקומי</option>
           </select>
         </div>
-        <div class="form-group"><label class="form-label">אחראי</label><input type="text" class="form-input" id="skuAddResp" placeholder="שם האחראי..."/></div>
+        <div class="form-group"><label class="form-label">ספק 2</label><input type="text" class="form-input" id="skuAddSupplier2" placeholder="ספק נוסף..."/></div>
+        <div class="form-group"><label class="form-label">איש רכש</label><input type="text" class="form-input" id="skuAddResp" placeholder="שם איש הרכש..."/></div>
         <div class="form-group"><label class="form-label">כשרות</label><input type="text" class="form-input" id="skuAddKashrus" placeholder="עדה חרדית / בית יוסף..."/></div>
         <div class="form-group"><label class="form-label">כשרות פסח</label><input type="text" class="form-input" id="skuAddPesach" placeholder="כשרות לפסח..."/></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">הערות</label><input type="text" class="form-input" id="skuAddNotes" placeholder="הערות..."/></div>
         <div class="form-group" style="grid-column:1/-1"><label class="form-label">הערות</label><input type="text" class="form-input" id="skuAddNotes" placeholder="הערות חופשיות..."/></div>
       </div>
       <button class="btn btn-accent" style="margin-top:8px" onclick="addSkuManual()">הוסף מקט</button>
@@ -902,7 +906,7 @@ initAuth();loadStats();loadTags();loadDocs();
     <!-- ייבוא Excel -->
     <div id="skuPaneImport" style="display:none">
       <div id="skuImportAlert"></div>
-      <p style="font-size:.9rem;color:var(--ink2);margin-bottom:16px">העלה קובץ Excel עם העמודות: מקט, תיאור מוצר, ספק, שם ספק, טיפוס, רכש, כשרות, פסח.<br/>מקטים קיימים יתעדכנו, חדשים יתווספו.</p>
+      <p style="font-size:.9rem;color:var(--ink2);margin-bottom:16px">העלה קובץ Excel עם העמודות: מקט, תאור מוצר, טיפוס, מקור, איש רכש, ספק 2, ספק 1, כשרות, פסח, הערות.<br/>מקטים קיימים יתעדכנו, חדשים יתווספו.</p>
       <input type="file" id="skuImportFile" accept=".xlsx,.xls" class="form-input" style="margin-bottom:12px"/>
       <button class="btn btn-accent" onclick="importSkuFile()">ייבא קובץ</button>
     </div>
@@ -944,7 +948,8 @@ initAuth();loadStats();loadTags();loadDocs();
     <div id="skuEditAlert"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">שם מוצר</label><input type="text" class="form-input" id="skuEditName"/></div>
-      <div class="form-group" style="grid-column:1/-1"><label class="form-label">ספק</label><input type="text" class="form-input" id="skuEditSupplier"/></div>
+      <div class="form-group"><label class="form-label">ספק 1</label><input type="text" class="form-input" id="skuEditSupplier"/></div>
+      <div class="form-group"><label class="form-label">ספק 2</label><input type="text" class="form-input" id="skuEditSupplier2"/></div>
       <div class="form-group"><label class="form-label">טיפוס</label>
         <select class="form-select" id="skuEditTipus">
           <option value="">— בחר —</option>
@@ -959,7 +964,7 @@ initAuth();loadStats();loadTags();loadDocs();
           <option value="רכש מקומי">רכש מקומי</option>
         </select>
       </div>
-      <div class="form-group"><label class="form-label">אחראי</label><input type="text" class="form-input" id="skuEditResp"/></div>
+      <div class="form-group"><label class="form-label">איש רכש</label><input type="text" class="form-input" id="skuEditResp"/></div>
       <div class="form-group"><label class="form-label">כשרות</label><input type="text" class="form-input" id="skuEditKashrus"/></div>
       <div class="form-group"><label class="form-label">כשרות פסח</label><input type="text" class="form-input" id="skuEditPesach"/></div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">הערות</label><input type="text" class="form-input" id="skuEditNotes"/></div>
@@ -1001,12 +1006,14 @@ async function loadSkuList(){
     <tr style="border-bottom:1px solid var(--border1)" id="skurow_${s.id}">
       <td style="padding:7px 8px;font-weight:600;color:var(--accent2)">${s.id}</td>
       <td style="padding:7px 8px" id="skuname_${s.id}">${s.name}</td>
-      <td style="padding:7px 8px;color:var(--ink3)" id="skusup_${s.id}">${s.supplier||''}</td>
       <td style="padding:7px 8px;text-align:center">${s.tipus?`<span style="font-size:.75rem;padding:2px 7px;border-radius:99px;background:#EEF2FF;color:#3730a3">${s.tipus}</span>`:''}</td>
       <td style="padding:7px 8px;text-align:center">${s.source?`<span style="font-size:.75rem;padding:2px 7px;border-radius:99px;background:${s.source==='יבוא'?'#fef9c3;color:#854d0e':'#dcfce7;color:#166534'}">${s.source}</span>`:''}</td>
+      <td style="padding:7px 8px;color:var(--ink3);font-size:.8rem" id="skusup_${s.id}">${s.supplier||''}</td>
+      <td style="padding:7px 8px;color:var(--ink3);font-size:.8rem">${s.supplier2||''}</td>
       <td style="padding:7px 8px;text-align:center;color:var(--ink3);font-size:.8rem">${s.responsible||''}</td>
       <td style="padding:7px 8px;text-align:center;color:var(--ink3);font-size:.8rem">${s.kashrus||''}</td>
       <td style="padding:7px 8px;text-align:center;color:var(--ink3);font-size:.8rem">${s.pesach||''}</td>
+      <td style="padding:7px 8px;color:var(--ink3);font-size:.8rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.notes||''}">${s.notes||''}</td>
       <td style="padding:7px 8px;text-align:center;white-space:nowrap">
         <button class="icon-btn" onclick="startEditSku('${s.id}')" title="עריכה">✏️</button>
         <button class="icon-btn" onclick="deleteSku('${s.id}')" title="מחיקה" style="color:#dc2626">🗑</button>
@@ -1040,12 +1047,15 @@ async function addSkuManual(){
   const id=document.getElementById('skuAddId').value.trim();
   const name=document.getElementById('skuAddName').value.trim();
   const supplier=document.getElementById('skuAddSupplier').value.trim();
+  const supplier2=document.getElementById('skuAddSupplier2')?.value.trim()||'';
+  const responsible=document.getElementById('skuAddResp')?.value.trim()||'';
+  const kashrus=document.getElementById('skuAddKashrus')?.value.trim()||'';
+  const pesach=document.getElementById('skuAddPesach')?.value.trim()||'';
+  const notes=document.getElementById('skuAddNotes')?.value.trim()||'';
   if(!id||!name){document.getElementById('skuAddAlert').innerHTML='<div class="alert alert-error">נא למלא מקט ושם</div>';return;}
   try{
-    await apiFetch('/api/skus',{method:'POST',body:JSON.stringify({id,name,supplier})});
-    document.getElementById('skuAddId').value='';
-    document.getElementById('skuAddName').value='';
-    document.getElementById('skuAddSupplier').value='';
+    await apiFetch('/api/skus',{method:'POST',body:JSON.stringify({id,name,supplier,supplier2,responsible,kashrus,pesach,notes})});
+    ['skuAddId','skuAddName','skuAddSupplier','skuAddSupplier2','skuAddResp','skuAddKashrus','skuAddPesach','skuAddNotes'].forEach(x=>{const el=document.getElementById(x);if(el)el.value='';});
     document.getElementById('skuAddAlert').innerHTML='<div class="alert alert-success">המקט נוסף בהצלחה!</div>';
     setTimeout(()=>document.getElementById('skuAddAlert').innerHTML='',3000);
   }catch(e){document.getElementById('skuAddAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
@@ -1093,14 +1103,28 @@ function renderReport(){
       <thead><tr style="background:var(--bg2);position:sticky;top:0">
         <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">מקט</th>
         <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">שם מוצר</th>
-        <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">ספק</th>
+        <th style="padding:7px 8px;text-align:center;border-bottom:1px solid var(--border2)">טיפוס</th>
+        <th style="padding:7px 8px;text-align:center;border-bottom:1px solid var(--border2)">מקור</th>
+        <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">ספק 1</th>
+        <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">ספק 2</th>
+        <th style="padding:7px 8px;text-align:center;border-bottom:1px solid var(--border2)">איש רכש</th>
+        <th style="padding:7px 8px;text-align:center;border-bottom:1px solid var(--border2)">כשרות</th>
+        <th style="padding:7px 8px;text-align:center;border-bottom:1px solid var(--border2)">פסח</th>
+        <th style="padding:7px 8px;text-align:right;border-bottom:1px solid var(--border2)">הערות</th>
         <th style="padding:7px 8px;text-align:center;border-bottom:1px solid var(--border2)">מסמכים</th>
       </tr></thead>
       <tbody>${data.map(s=>`
         <tr style="border-bottom:1px solid var(--border1);background:${s.doc_count===0?'#fff7f7':''}">
           <td style="padding:6px 8px;font-weight:600;color:var(--accent2)">${s.id}</td>
           <td style="padding:6px 8px">${s.name}</td>
-          <td style="padding:6px 8px;color:var(--ink3)">${s.supplier||''}</td>
+          <td style="padding:6px 8px;text-align:center">${s.tipus?`<span style="font-size:.72rem;padding:2px 6px;border-radius:99px;background:#EEF2FF;color:#3730a3">${s.tipus}</span>`:''}</td>
+          <td style="padding:6px 8px;text-align:center">${s.source?`<span style="font-size:.72rem;padding:2px 6px;border-radius:99px;background:${s.source==='יבוא'?'#fef9c3;color:#854d0e':'#dcfce7;color:#166534'}">${s.source}</span>`:''}</td>
+          <td style="padding:6px 8px;color:var(--ink3);font-size:.8rem">${s.supplier||''}</td>
+          <td style="padding:6px 8px;color:var(--ink3);font-size:.8rem">${s.supplier2||''}</td>
+          <td style="padding:6px 8px;text-align:center;color:var(--ink3);font-size:.8rem">${s.responsible||''}</td>
+          <td style="padding:6px 8px;text-align:center;color:var(--ink3);font-size:.8rem">${s.kashrus||''}</td>
+          <td style="padding:6px 8px;text-align:center;color:var(--ink3);font-size:.8rem">${s.pesach||''}</td>
+          <td style="padding:6px 8px;color:var(--ink3);font-size:.8rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.notes||''}">${s.notes||''}</td>
           <td style="padding:6px 8px;text-align:center">
             ${s.doc_count===0
               ? '<span style="color:#dc2626;font-weight:600">⚠ חסר</span>'
@@ -1250,18 +1274,20 @@ function exportReportExcel() {
   // בנה שורות
   const rows = [];
   // כותרות
-  rows.push(['מקט','שם מוצר','ספק','טיפוס','מקור','אחראי','כשרות','פסח',"מס' מסמכים",'סטטוס']);
+  rows.push(['מקט','שם מוצר','טיפוס','מקור','ספק 1','ספק 2','איש רכש','כשרות','פסח','הערות',"מס' מסמכים",'סטטוס']);
 
   data.forEach(s => {
     rows.push([
       s.id,
       s.name,
-      s.supplier||'',
       s.tipus||'',
       s.source||'',
+      s.supplier||'',
+      s.supplier2||'',
       s.responsible||'',
       s.kashrus||'',
       s.pesach||'',
+      s.notes||'',
       s.doc_count,
       s.doc_count===0 ? 'חסר מסמך' : 'יש מסמך'
     ]);
