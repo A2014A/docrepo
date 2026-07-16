@@ -1,0 +1,27 @@
+{
+  "name": "מאגר מסמכים - אחים כהן",
+  "short_name": "מאגר מסמכים",
+  "description": "מערכת ניהול וצפייה במסמכים",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F5F2EC",
+  "theme_color": "#2D5A3D",
+  "dir": "rtl",
+  "lang": "he",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
