@@ -1,58 +1,55 @@
+require('dotenv').config();
 const express  = require('express');
 const cors     = require('cors');
 const path     = require('path');
-const fs       = require('fs');
 const multer   = require('multer');
 const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
-const low      = require('lowdb');
-const FileSync = require('lowdb/adapters/FileSync');
+const { PrismaClient } = require('@prisma/client');
+const { uploadBuffer, getObjectStream } = require('./lib/r2');
+
+const prisma = new PrismaClient();
 
 const PORT       = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'docrepo_secret_change_in_prod';
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
-const DATA_DIR    = path.join(__dirname, 'uploads', '_data');
 
-[UPLOADS_DIR, DATA_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
-
-const dbPath = path.join(DATA_DIR, 'db.json');
-// אם db לא קיים — העתק מ-data/db.json
-const fallbackDbPath = path.join(__dirname, 'data', 'db.json');
-if (!fs.existsSync(dbPath)) {
-  if (fs.existsSync(fallbackDbPath)) {
-    fs.copyFileSync(fallbackDbPath, dbPath);
-    console.log('db.json הועתק לדיסק הקבוע');
+/* ── generic settings (was top-level db fields: view_code/assistant_code/viewer_code) ── */
+const SETTINGS_DEFAULTS = { assistant_code: '5678', viewer_code: '0000', view_code: '1234' };
+async function getSetting(key) {
+  const row = await prisma.syncState.findUnique({ where: { key } });
+  return row ? row.value : SETTINGS_DEFAULTS[key];
+}
+async function setSetting(key, value) {
+  await prisma.syncState.upsert({ where: { key }, update: { value }, create: { key, value } });
+}
+async function ensureDefaults() {
+  const userCount = await prisma.user.count();
+  if (userCount === 0) {
+    await prisma.user.create({
+      data: { email: 'admin', passwordHash: bcrypt.hashSync('1234', 10), role: 'ADMIN' },
+    });
+    console.log('Default admin created: admin / 1234');
+  }
+  for (const [key, value] of Object.entries(SETTINGS_DEFAULTS)) {
+    const existing = await prisma.syncState.findUnique({ where: { key } });
+    if (!existing) await prisma.syncState.create({ data: { key, value } });
   }
 }
-const db = low(new FileSync(dbPath));
-db.defaults({ users: [], documents: [], skus: [], nextDocId: 1, nextUserId: 1, view_code: '1234', assistant_code: '5678', viewer_code: '0000' }).write();
-// וודא שדות קודים קיימים ב-db ישן
-if (!db.get('assistant_code').value()) db.set('assistant_code', '5678').write();
-if (!db.get('viewer_code').value())    db.set('viewer_code',    '0000').write();
-if (!db.get('view_code').value())      db.set('view_code',      '1234').write();
+ensureDefaults().catch(e => console.error('startup defaults failed', e));
 
-if (!db.get('users').find({ username: 'admin' }).value()) {
-  const id = db.get('nextUserId').value();
-  db.get('users').push({ id, username: 'admin', password: bcrypt.hashSync('1234', 10), role: 'admin' }).write();
-  db.set('nextUserId', id + 1).write();
-  console.log('Default admin created: admin / 1234');
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-  filename:    (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, Date.now() + '-' + Math.random().toString(36).slice(2) + ext);
-  }
-});
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = ['.pdf','.doc','.docx','.xls','.xlsx','.ppt','.pptx','.jpg','.jpeg','.png','.gif','.txt'];
     cb(null, allowed.includes(path.extname(file.originalname).toLowerCase()));
   }
 });
+
+function r2KeyFor(originalname) {
+  const ext = path.extname(originalname);
+  return `docs/${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+}
 
 const app = express();
 app.use(cors());
@@ -88,16 +85,14 @@ function requireAdmin(req, res, next) {
 }
 
 /* middleware: מנהל או עוזר (JWT או קוד עוזר) */
-function requireAssistant(req, res, next) {
-  // בדוק JWT תקין
+async function requireAssistant(req, res, next) {
   const header = req.headers.authorization || '';
   const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (token) {
     try { req.user = jwt.verify(token, JWT_SECRET); return next(); } catch {}
   }
-  // בדוק X-Assistant-Code header
   const code = req.headers['x-assistant-code'] || '';
-  const ac = db.get('assistant_code').value();
+  const ac = await getSetting('assistant_code');
   if (code && code === ac) {
     req.user = { username: 'assistant', role: 'assistant' };
     return next();
@@ -109,17 +104,47 @@ function fmtSize(bytes) {
   if (!bytes) return '—';
   return bytes > 1048576 ? (bytes/1048576).toFixed(1)+' MB' : Math.round(bytes/1024)+' KB';
 }
-function docOut(d) {
-  return { ...d, size_label: fmtSize(d.size_bytes) };
+
+/* ── shape adapters: Prisma model <-> legacy JSON the frontend expects ── */
+function skuOut(s) {
+  return {
+    id: s.code, name: s.name, supplier: s.supplier || '', supplier2: s.supplier2 || '',
+    tipus: s.tipus || '', source: s.sourceFlag || '', responsible: s.responsible || '',
+    kashrus: s.kashrutBodyRef || '', pesach: s.pesachStatusRef || '', notes: s.notes || '',
+  };
 }
 
+async function docOut(d) {
+  const links = await prisma.skuLink.findMany({
+    where: { docType: 'DOCUMENT', documentId: d.id },
+    include: { sku: true },
+  });
+  const uploaderUser = d.uploadedById ? await prisma.user.findUnique({ where: { id: d.uploadedById } }) : null;
+  return {
+    id: d.id,
+    name: d.title || '',
+    description: d.description || '',
+    filename: path.basename(d.fileUrl),
+    original_name: d.title || path.basename(d.fileUrl),
+    ext: (d.docExt || path.extname(d.fileUrl).replace('.', '')),
+    size_bytes: d.sizeBytes || 0,
+    size_label: fmtSize(d.sizeBytes || 0),
+    tags: d.tags || [],
+    doctype: d.docType || '',
+    skus: links.map(l => skuOut(l.sku)),
+    expiry_date: d.expiryDate ? d.expiryDate.toISOString().slice(0, 10) : '',
+    production_date: d.productionDate ? d.productionDate.toISOString().slice(0, 10) : '',
+    hidden: d.hidden,
+    uploader: uploaderUser ? uploaderUser.email : '',
+    created_at: d.createdAt.toISOString(),
+  };
+}
 
 /* ── TEMP RESET (להסרה אחרי שימוש) ── */
-app.get('/api/reset-admin-password', (req, res) => {
-  const bcrypt = require('bcryptjs');
-  const user = db.get('users').find({ username: 'admin' }).value();
+app.get('/api/reset-admin-password', async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { email: 'admin' } });
   if (user) {
-    db.get('users').find({ username: 'admin' }).assign({ password: bcrypt.hashSync('1234', 10) }).write();
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: bcrypt.hashSync('1234', 10) } });
     res.json({ ok: true, message: 'סיסמת מנהל אופסה ל-1234' });
   } else {
     res.json({ ok: false, message: 'משתמש admin לא נמצא' });
@@ -127,71 +152,79 @@ app.get('/api/reset-admin-password', (req, res) => {
 });
 
 /* ── AUTH ── */
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'חסרים פרטים' });
-  const user = db.get('users').find({ username }).value();
-  if (!user || !bcrypt.compareSync(password, user.password))
+  const user = await prisma.user.findUnique({ where: { email: username } });
+  if (!user || !bcrypt.compareSync(password, user.passwordHash))
     return res.status(401).json({ error: 'שם משתמש או סיסמה שגויים' });
-  const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
-  res.json({ token, username: user.username, role: user.role });
+  const role = user.role.toLowerCase();
+  const token = jwt.sign({ id: user.id, username: user.email, role }, JWT_SECRET, { expiresIn: '8h' });
+  res.json({ token, username: user.email, role });
 });
 
-app.patch('/api/auth/password', requireAuth, requireAdmin, (req, res) => {
+app.patch('/api/auth/password', requireAuth, requireAdmin, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
-  const user = db.get('users').find({ id: req.user.id }).value();
-  if (!bcrypt.compareSync(currentPassword, user.password))
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  if (!bcrypt.compareSync(currentPassword, user.passwordHash))
     return res.status(400).json({ error: 'סיסמה נוכחית שגויה' });
-  db.get('users').find({ id: req.user.id }).assign({ password: bcrypt.hashSync(newPassword, 10) }).write();
+  await prisma.user.update({ where: { id: user.id }, data: { passwordHash: bcrypt.hashSync(newPassword, 10) } });
   res.json({ ok: true });
 });
 
 /* ── SKUS ── */
-app.get('/api/skus', (req, res) => {
+app.get('/api/skus', async (req, res) => {
   const { q, all } = req.query;
-  let skus = db.get('skus').value();
-  if (q) {
-    const lq = q.toLowerCase();
-    skus = skus.filter(s =>
-      s.id.includes(q) ||
-      s.name.toLowerCase().includes(lq) ||
-      (s.supplier||'').toLowerCase().includes(lq)
-    );
-  }
-  res.json(all ? skus : skus.slice(0, 50));
+  const where = q ? {
+    OR: [
+      { code: { contains: q } },
+      { name: { contains: q, mode: 'insensitive' } },
+      { supplier: { contains: q, mode: 'insensitive' } },
+    ],
+  } : {};
+  const skus = await prisma.sku.findMany({ where, take: all ? undefined : 50 });
+  res.json(skus.map(skuOut));
 });
 
-app.post('/api/skus', requireAuth, (req, res) => {
+app.post('/api/skus', requireAuth, async (req, res) => {
   const { id, name, supplier, tipus, source, responsible, kashrus, pesach, notes } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'חסרים מספר ושם' });
-  if (db.get('skus').find({ id: String(id) }).value())
+  if (await prisma.sku.findUnique({ where: { code: String(id) } }))
     return res.status(400).json({ error: 'מקט כבר קיים' });
-  const sku = { id: String(id), name, supplier: supplier||'', tipus: tipus||'', source: source||'', responsible: responsible||'', kashrus: kashrus||'', pesach: pesach||'', notes: notes||'' };
-  db.get('skus').push(sku).write();
-  res.status(201).json(sku);
+  const sku = await prisma.sku.create({
+    data: {
+      code: String(id), name, supplier: supplier||'', tipus: tipus||'',
+      sourceFlag: source||'', responsible: responsible||'',
+      kashrutBodyRef: kashrus||'', pesachStatusRef: pesach||'', notes: notes||'',
+      reviewedAt: new Date(),
+    },
+  });
+  res.status(201).json(skuOut(sku));
 });
 
-app.patch('/api/skus/:id', requireAuth, (req, res) => {
-  const sku = db.get('skus').find({ id: req.params.id }).value();
+app.patch('/api/skus/:id', requireAuth, async (req, res) => {
+  const sku = await prisma.sku.findUnique({ where: { code: req.params.id } });
   if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
   const { name, supplier, tipus, source, responsible, kashrus, pesach, notes } = req.body;
   const updates = {};
-  if (name        !== undefined) updates.name        = name;
-  if (supplier    !== undefined) updates.supplier    = supplier;
-  if (tipus       !== undefined) updates.tipus       = tipus;
-  if (source      !== undefined) updates.source      = source;
-  if (responsible !== undefined) updates.responsible = responsible;
-  if (kashrus     !== undefined) updates.kashrus     = kashrus;
-  if (pesach      !== undefined) updates.pesach      = pesach;
-  if (notes       !== undefined) updates.notes       = notes;
-  db.get('skus').find({ id: req.params.id }).assign(updates).write();
-  res.json(db.get('skus').find({ id: req.params.id }).value());
+  if (name        !== undefined) updates.name           = name;
+  if (supplier    !== undefined) updates.supplier       = supplier;
+  if (tipus       !== undefined) updates.tipus          = tipus;
+  if (source      !== undefined) updates.sourceFlag     = source;
+  if (responsible !== undefined) updates.responsible    = responsible;
+  if (kashrus     !== undefined) updates.kashrutBodyRef = kashrus;
+  if (pesach      !== undefined) updates.pesachStatusRef= pesach;
+  if (notes       !== undefined) updates.notes          = notes;
+  updates.reviewedAt = new Date();
+  const updated = await prisma.sku.update({ where: { code: req.params.id }, data: updates });
+  res.json(skuOut(updated));
 });
 
-app.delete('/api/skus/:id', requireAuth, requireAdmin, (req, res) => {
-  if (!db.get('skus').find({ id: req.params.id }).value())
-    return res.status(404).json({ error: 'מקט לא נמצא' });
-  db.get('skus').remove({ id: req.params.id }).write();
+app.delete('/api/skus/:id', requireAuth, requireAdmin, async (req, res) => {
+  const sku = await prisma.sku.findUnique({ where: { code: req.params.id } });
+  if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
+  await prisma.skuLink.deleteMany({ where: { skuId: sku.id } });
+  await prisma.sku.delete({ where: { id: sku.id } });
   res.json({ ok: true });
 });
 
@@ -199,7 +232,7 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), async (req, res
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
   try {
     const XLSX = require('xlsx');
-    const wb = XLSX.readFile(req.file.path);
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
     let added = 0, updated = 0;
@@ -213,239 +246,252 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), async (req, res
       const responsible  = row[4] ? String(row[4]).trim() : '';
       const supplier2    = row[5] ? String(row[5]).trim() : '';
       const supplier     = row[6] ? String(row[6]).trim() : '';
-      const kashrus      = row[7] ? String(row[7]).trim() : '';
-      const pesach       = row[8] && row[8] !== '#N/A' ? String(row[8]).trim() : '';
-      const notes        = row[9] ? String(row[9]).trim() : '';
+      const kashrus       = row[7] ? String(row[7]).trim() : '';
+      const pesach        = row[8] && row[8] !== '#N/A' ? String(row[8]).trim() : '';
+      const notes         = row[9] ? String(row[9]).trim() : '';
       if (!id || !name || id === 'undefined') continue;
-      const existing = db.get('skus').find({ id }).value();
-      const data = { id, name, supplier, supplier2, tipus, source, responsible, kashrus, pesach, notes };
+      const existing = await prisma.sku.findUnique({ where: { code: id } });
+      const data = { name, supplier, supplier2, tipus, sourceFlag: source, responsible, kashrutBodyRef: kashrus, pesachStatusRef: pesach, notes };
       if (existing) {
-        db.get('skus').find({ id }).assign(data).write();
+        await prisma.sku.update({ where: { code: id }, data });
         updated++;
       } else {
-        db.get('skus').push(data).write();
+        await prisma.sku.create({ data: { code: id, ...data } });
         added++;
       }
     }
-    const fp = path.join(UPLOADS_DIR, req.file.filename);
-    if (fs.existsSync(fp)) fs.unlinkSync(fp);
-    res.json({ ok: true, added, updated, total: db.get('skus').value().length });
+    const total = await prisma.sku.count();
+    res.json({ ok: true, added, updated, total });
   } catch(e) {
     res.status(500).json({ error: 'שגיאה בקריאת הקובץ: ' + e.message });
   }
 });
 
-app.get('/api/skus/report', requireAuth, (req, res) => {
-  const skus = db.get('skus').value();
-  const docs = db.get('documents').value();
-  const report = skus.map(s => {
-    const linked = docs.filter(d => (d.skus||[]).some(ds => ds.id === s.id));
-    return { ...s, supplier2: s.supplier2||'', notes: s.notes||'', doc_count: linked.length, docs: linked.map(d => ({ id: d.id, name: d.name, doctype: d.doctype||'', expiry_date: d.expiry_date||'', production_date: d.production_date||'', size_label: d.size_label||'', ext: d.ext||'' })) };
-  });
+app.get('/api/skus/report', requireAuth, async (req, res) => {
+  const skus = await prisma.sku.findMany();
+  const report = await Promise.all(skus.map(async s => {
+    const links = await prisma.skuLink.findMany({ where: { skuId: s.id }, include: { document: true } });
+    const withDocs = links.filter(l => l.document);
+    return {
+      ...skuOut(s),
+      doc_count: links.length,
+      docs: withDocs.map(l => ({
+        id: l.document.id, name: l.document.title, doctype: l.document.docType || '',
+        expiry_date: l.document.expiryDate ? l.document.expiryDate.toISOString().slice(0,10) : '',
+        production_date: l.document.productionDate ? l.document.productionDate.toISOString().slice(0,10) : '',
+        size_label: fmtSize(l.document.sizeBytes || 0), ext: l.document.docExt || '',
+      })),
+    };
+  }));
   res.json(report);
 });
 
 /* ── STATS ── */
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', async (req, res) => {
   const admin = isAdminReq(req);
-  let docs = db.get('documents').value();
-  if (!admin) docs = docs.filter(d => !d.hidden);
+  const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
   const tags  = new Set(docs.flatMap(d => d.tags || []));
-  const types = new Set(docs.map(d => d.ext));
+  const types = new Set(docs.map(d => d.docExt).filter(Boolean));
   res.json({ total: docs.length, tags: tags.size, types: types.size });
 });
 
 /* ── TAGS ── */
-app.get('/api/tags', (req, res) => {
+app.get('/api/tags', async (req, res) => {
   const admin = isAdminReq(req);
-  let docs = db.get('documents').value();
-  if (!admin) docs = docs.filter(d => !d.hidden);
+  const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
   const map = {};
   docs.forEach(d => (d.tags||[]).forEach(t => { map[t] = (map[t]||0)+1; }));
   res.json(Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([tag,count])=>({ tag, count })));
 });
 
 /* ── DOCTYPES ── */
-app.get('/api/doctypes', (req, res) => {
+app.get('/api/doctypes', async (req, res) => {
   const admin = isAdminReq(req);
-  let docs = db.get('documents').value();
-  if (!admin) docs = docs.filter(d => !d.hidden);
+  const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
   const map = {};
-  docs.forEach(d => { if (d.doctype) map[d.doctype] = (map[d.doctype]||0)+1; });
+  docs.forEach(d => { if (d.docType) map[d.docType] = (map[d.docType]||0)+1; });
   res.json(Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([doctype,count])=>({ doctype, count })));
 });
 
 /* ── GET DOCS ── */
-app.get('/api/docs', (req, res) => {
+app.get('/api/docs', async (req, res) => {
   const { q, tag, doctype, sort = 'date-desc' } = req.query;
   const admin = isAdminReq(req);
-  let docs = db.get('documents').value();
+  const where = {};
+  if (!admin) where.hidden = false;
+  if (tag && tag !== 'הכל') where.tags = { has: tag };
+  if (doctype && doctype !== 'הכל') where.docType = doctype;
 
-  if (!admin) docs = docs.filter(d => !d.hidden);
-  if (tag && tag !== 'הכל') docs = docs.filter(d => (d.tags||[]).includes(tag));
-  if (doctype && doctype !== 'הכל') docs = docs.filter(d => d.doctype === doctype);
-  if (q) {
+  const orderBy =
+    sort === 'date-asc'  ? { createdAt: 'asc' } :
+    sort === 'name-asc'  ? { title: 'asc' } :
+    sort === 'name-desc' ? { title: 'desc' } :
+    { createdAt: 'desc' };
+
+  let docs = await prisma.document.findMany({ where, orderBy });
+  const out = await Promise.all(docs.map(docOut));
+
+  const filtered = q ? out.filter(d => {
     const lq = q.toLowerCase();
-    docs = docs.filter(d =>
-      d.name.toLowerCase().includes(lq) ||
+    return d.name.toLowerCase().includes(lq) ||
       (d.description||'').toLowerCase().includes(lq) ||
       (d.tags||[]).some(t => t.toLowerCase().includes(lq)) ||
       (d.doctype||'').includes(lq) ||
-      (d.skus||[]).some(s => s.id.includes(q) || s.name.toLowerCase().includes(lq))
-    );
-  }
-  const sortFns = {
-    'date-desc': (a,b) => new Date(b.created_at)-new Date(a.created_at),
-    'date-asc':  (a,b) => new Date(a.created_at)-new Date(b.created_at),
-    'name-asc':  (a,b) => a.name.localeCompare(b.name,'he'),
-    'name-desc': (a,b) => b.name.localeCompare(a.name,'he'),
-  };
-  docs.sort(sortFns[sort] || sortFns['date-desc']);
-  res.json(docs.map(docOut));
+      (d.skus||[]).some(s => s.id.includes(q) || s.name.toLowerCase().includes(lq));
+  }) : out;
+
+  res.json(filtered);
 });
 
 /* ── POST single ── */
-app.post('/api/docs', requireAssistant, upload.single('file'), (req, res) => {
+app.post('/api/docs', requireAssistant, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
   const { name, description, tags, doctype, hidden, skus, expiry_date, production_date } = req.body;
   const docName    = name || req.file.originalname.replace(/\.[^.]+$/,'');
   const ext        = path.extname(req.file.originalname).replace('.','').toLowerCase();
   const parsedTags = tags ? JSON.parse(tags).map(t=>t.trim()).filter(Boolean) : ['כללי'];
   const parsedSkus = skus ? JSON.parse(skus) : [];
-  const id         = db.get('nextDocId').value();
-  const doc = {
-    id, name: docName, description: description||'',
-    filename: req.file.filename, original_name: req.file.originalname,
-    ext, size_bytes: req.file.size,
-    tags: parsedTags,
-    doctype: doctype || '',
-    skus: parsedSkus,
-    expiry_date: expiry_date || '',
-    production_date: production_date || '',
-    hidden: hidden === 'true',
-    uploader: req.user.username,
-    created_at: new Date().toISOString()
-  };
-  db.get('documents').unshift(doc).write();
-  db.set('nextDocId', id+1).write();
-  res.status(201).json(docOut(doc));
+
+  const key = r2KeyFor(req.file.originalname);
+  await uploadBuffer(req.file.buffer, key, req.file.mimetype);
+
+  const doc = await prisma.document.create({
+    data: {
+      title: docName, description: description||'', docType: doctype || '', docExt: ext, sizeBytes: req.file.size,
+      tags: parsedTags, fileUrl: key,
+      expiryDate: expiry_date ? new Date(expiry_date) : null,
+      productionDate: production_date ? new Date(production_date) : null,
+      hidden: hidden === 'true',
+      uploadedById: req.user.id || null,
+    },
+  });
+  for (const s of parsedSkus) {
+    const sku = await prisma.sku.findUnique({ where: { code: String(s.id) } });
+    if (sku) await prisma.skuLink.create({
+      data: { skuId: sku.id, docType: 'DOCUMENT', documentId: doc.id, approvalStatus: 'APPROVED', visibleToCustomer: false },
+    });
+  }
+  res.status(201).json(await docOut(doc));
 });
 
 /* ── POST multi ── */
-app.post('/api/docs/multi', requireAuth, upload.array('files', 50), (req, res) => {
+app.post('/api/docs/multi', requireAuth, upload.array('files', 50), async (req, res) => {
   if (!req.files || !req.files.length) return res.status(400).json({ error: 'לא נבחרו קבצים' });
   const tags        = req.body.tags ? JSON.parse(req.body.tags).map(t=>t.trim()).filter(Boolean) : ['כללי'];
   const description = req.body.description || '';
   const doctype     = req.body.doctype || '';
   const hidden      = req.body.hidden === 'true';
   const created     = [];
-  req.files.forEach(file => {
-    const id  = db.get('nextDocId').value();
+  for (const file of req.files) {
     const ext = path.extname(file.originalname).replace('.','').toLowerCase();
-    const doc = {
-      id, name: file.originalname.replace(/\.[^.]+$/,''), description,
-      filename: file.filename, original_name: file.originalname,
-      ext, size_bytes: file.size,
-      tags: [...tags], doctype, hidden,
-      uploader: req.user.username,
-      created_at: new Date().toISOString()
-    };
-    db.get('documents').unshift(doc).write();
-    db.set('nextDocId', id+1).write();
-    created.push(docOut(doc));
-  });
+    const key = r2KeyFor(file.originalname);
+    await uploadBuffer(file.buffer, key, file.mimetype);
+    const doc = await prisma.document.create({
+      data: {
+        title: file.originalname.replace(/\.[^.]+$/,''), description, docType: doctype, docExt: ext,
+        sizeBytes: file.size, tags: [...tags], hidden, fileUrl: key, uploadedById: req.user.id || null,
+      },
+    });
+    created.push(await docOut(doc));
+  }
   res.status(201).json(created);
 });
 
 /* ── PATCH ── */
-app.patch('/api/docs/:id', requireAssistant, (req, res) => {
+app.patch('/api/docs/:id', requireAssistant, async (req, res) => {
   const id  = parseInt(req.params.id);
-  const doc = db.get('documents').find({ id }).value();
+  const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
   const { name, description, tags, doctype, hidden, skus, expiry_date, production_date } = req.body;
   const updates = {};
-  if (name        !== undefined) updates.name        = name;
-  if (description !== undefined) updates.description = description;
-  if (tags        !== undefined) updates.tags        = tags.map(t=>t.trim()).filter(Boolean);
-  if (doctype     !== undefined) updates.doctype     = doctype;
-  if (hidden      !== undefined) updates.hidden      = hidden;
-  if (skus        !== undefined) updates.skus        = skus;
-  if (expiry_date       !== undefined) updates.expiry_date       = expiry_date;
-  if (production_date   !== undefined) updates.production_date   = production_date;
-  db.get('documents').find({ id }).assign(updates).write();
-  res.json(docOut(db.get('documents').find({ id }).value()));
+  if (name            !== undefined) updates.title          = name;
+  if (description      !== undefined) updates.description   = description;
+  if (tags            !== undefined) updates.tags           = tags.map(t=>t.trim()).filter(Boolean);
+  if (doctype         !== undefined) updates.docType        = doctype;
+  if (hidden          !== undefined) updates.hidden         = hidden;
+  if (expiry_date     !== undefined) updates.expiryDate     = expiry_date ? new Date(expiry_date) : null;
+  if (production_date !== undefined) updates.productionDate = production_date ? new Date(production_date) : null;
+  const updated = await prisma.document.update({ where: { id }, data: updates });
+
+  if (skus !== undefined) {
+    await prisma.skuLink.deleteMany({ where: { docType: 'DOCUMENT', documentId: id } });
+    for (const s of skus) {
+      const sku = await prisma.sku.findUnique({ where: { code: String(s.id) } });
+      if (sku) await prisma.skuLink.create({
+        data: { skuId: sku.id, docType: 'DOCUMENT', documentId: id, approvalStatus: 'APPROVED', visibleToCustomer: false },
+      });
+    }
+  }
+  res.json(await docOut(updated));
 });
 
 /* ── DELETE ── */
-app.delete('/api/docs/:id', requireAuth, requireAdmin, (req, res) => {
+app.delete('/api/docs/:id', requireAuth, requireAdmin, async (req, res) => {
   const id  = parseInt(req.params.id);
-  const doc = db.get('documents').find({ id }).value();
+  const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
-  const fp = path.join(UPLOADS_DIR, doc.filename);
-  if (fs.existsSync(fp)) fs.unlinkSync(fp);
-  db.get('documents').remove({ id }).write();
+  await prisma.skuLink.deleteMany({ where: { docType: 'DOCUMENT', documentId: id } });
+  await prisma.document.delete({ where: { id } });
   res.json({ ok: true });
+  // note: intentionally not deleting the R2 object -- keep it recoverable; a
+  // separate cleanup pass can reap orphaned keys later if storage cost matters.
 });
 
-/* ── DOWNLOAD ── */
-
-
 /* ── ROLE CODES ── */
-app.get('/api/role-code/check', (req, res) => {
+app.get('/api/role-code/check', async (req, res) => {
   const { code } = req.query;
-  const ac = db.get('assistant_code').value();
-  const vc = db.get('viewer_code').value();
+  const ac = await getSetting('assistant_code');
+  const vc = await getSetting('viewer_code');
   if (code === ac) return res.json({ ok: true, role: 'assistant' });
   if (code === vc) return res.json({ ok: true, role: 'viewer' });
   res.json({ ok: false });
 });
 
-app.patch('/api/role-codes', requireAuth, requireAdmin, (req, res) => {
+app.patch('/api/role-codes', requireAuth, requireAdmin, async (req, res) => {
   const { assistant_code, viewer_code } = req.body;
-  if (assistant_code !== undefined) db.set('assistant_code', assistant_code).write();
-  if (viewer_code    !== undefined) db.set('viewer_code',    viewer_code).write();
+  if (assistant_code !== undefined) await setSetting('assistant_code', assistant_code);
+  if (viewer_code    !== undefined) await setSetting('viewer_code', viewer_code);
   res.json({ ok: true });
 });
 
 /* ── VIEW CODE ── */
-app.get('/api/view-code/check', (req, res) => {
+app.get('/api/view-code/check', async (req, res) => {
   const { code } = req.query;
-  const stored = db.get('view_code').value();
+  const stored = await getSetting('view_code');
   res.json({ ok: code === stored });
 });
 
-app.patch('/api/view-code', requireAuth, requireAdmin, (req, res) => {
+app.patch('/api/view-code', requireAuth, requireAdmin, async (req, res) => {
   const { code } = req.body;
   if (!code || code.length < 2) return res.status(400).json({ error: 'קוד קצר מדי' });
-  db.set('view_code', code).write();
+  await setSetting('view_code', code);
   res.json({ ok: true });
 });
 
-app.get('/api/docs/:id/download', (req, res) => {
-  const doc = db.get('documents').find({ id: parseInt(req.params.id) }).value();
+/* ── DOWNLOAD ── */
+app.get('/api/docs/:id/download', async (req, res) => {
+  const doc = await prisma.document.findUnique({ where: { id: parseInt(req.params.id) } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
   if (doc.hidden && !isAssistantReq(req)) return res.status(403).json({ error: 'אין גישה' });
-  const fp = path.join(UPLOADS_DIR, doc.filename);
-  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'הקובץ לא נמצא' });
-  const ext = doc.ext ? '.'+doc.ext : path.extname(doc.filename);
-  const safeName = doc.name ? doc.name + ext : doc.original_name;
-  const encoded = encodeURIComponent(safeName);
-  const inline = req.query.inline === '1';
-  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encoded}`);
-  res.sendFile(fp);
+  try {
+    const { stream, contentType } = await getObjectStream(doc.fileUrl);
+    const ext = doc.docExt ? '.'+doc.docExt : path.extname(doc.fileUrl);
+    const safeName = (doc.title || path.basename(doc.fileUrl)) + ext;
+    const encoded = encodeURIComponent(safeName);
+    const inline = req.query.inline === '1';
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encoded}`);
+    if (contentType) res.setHeader('Content-Type', contentType);
+    stream.pipe(res);
+  } catch (e) {
+    res.status(404).json({ error: 'הקובץ לא נמצא' });
+  }
 });
-
 
 /* ── IDENTIFY BY DOC ID ── */
 app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
-  const doc = db.get('documents').find({ id: parseInt(req.params.id) }).value();
+  const doc = await prisma.document.findUnique({ where: { id: parseInt(req.params.id) } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
-  const fp = path.join(UPLOADS_DIR, doc.filename);
-  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'קובץ לא נמצא' });
-  // קרא קובץ
-  const fileData = fs.readFileSync(fp).toString('base64');
-  const ext = (doc.ext || '').toLowerCase();
-  // רק PDF ותמונות נתמכות
+  const ext = (doc.docExt || '').toLowerCase();
   let mediaType = 'application/pdf';
   if (['jpg','jpeg'].includes(ext)) mediaType = 'image/jpeg';
   else if (ext === 'png') mediaType = 'image/png';
@@ -454,8 +500,14 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'מפתח API חסר' });
-    const skus = db.get('skus').value().slice(0, 800);
-    const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
+
+    const { stream } = await getObjectStream(doc.fileUrl);
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    const fileData = Buffer.concat(chunks).toString('base64');
+
+    const skus = await prisma.sku.findMany({ take: 800 });
+    const skuList = skus.map(s => `${s.code}: ${s.name}`).join('\n');
     const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
 
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
@@ -491,47 +543,23 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
     const clean = text.replace(/```json|```/g, '').trim();
     try { result = JSON.parse(clean); } catch { result = {}; }
 
-    result.suggested_skus = (result.suggested_skus || []).map(id => {
-      const sku = db.get('skus').find({ id: String(id) }).value();
-      return sku || { id: String(id), name: '', supplier: '' };
-    });
+    const suggested = [];
+    for (const id of (result.suggested_skus || [])) {
+      const sku = await prisma.sku.findUnique({ where: { code: String(id) } });
+      suggested.push(sku ? skuOut(sku) : { id: String(id), name: '', supplier: '' });
+    }
+    result.suggested_skus = suggested;
     res.json({ ok: true, ...result });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-
-/* ── RESTORE DB FROM GITHUB COPY (חד פעמי) ── */
-app.get('/api/restore-db', (req, res) => {
-  const fallback = path.join(__dirname, 'data', 'db.json');
-  const target   = path.join(DATA_DIR, 'db.json');
-  if (!fs.existsSync(fallback)) return res.json({ ok: false, msg: 'fallback לא נמצא' });
-  fs.copyFileSync(fallback, target);
-  res.json({ ok: true, msg: 'db.json הועתק בהצלחה — רענן את הדף' });
-});
-
-
-/* ── BACKUP DB (לגיבוי ה-db הנוכחי מהדיסק) ── */
-app.get('/api/backup-db', (req, res) => {
-  const target = path.join(DATA_DIR, 'db.json');
-  if (!fs.existsSync(target)) return res.json({ ok: false, msg: 'db.json לא נמצא על הדיסק' });
-  const content = fs.readFileSync(target, 'utf-8');
-  const db_data = JSON.parse(content);
-  res.json({ 
-    ok: true, 
-    documents: db_data.documents?.length || 0,
-    skus: db_data.skus?.length || 0,
-    users: db_data.users?.length || 0,
-    data: db_data
-  });
-});
-
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
 
 app.listen(PORT, () => {
   console.log(`\n מאגר מסמכים פועל על http://localhost:${PORT}`);
-  console.log(`  כניסת מנהל: admin / 1234\n`);
+  console.log(`  כניסת מנהל: admin / 1234 (אם זו הרצה ראשונה)\n`);
 });
 
 /* ── AI IDENTIFY ── */
@@ -540,13 +568,9 @@ app.post('/api/identify', requireAssistant, upload.single('file'), async (req, r
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY לא מוגדר' });
   try {
-    const fs2 = require('fs');
-    const fp = path.join(UPLOADS_DIR, req.file.filename);
-    const fileData = fs2.readFileSync(fp).toString('base64');
-    const ext = path.extname(req.file.originalname).toLowerCase();
-    // קבל רשימת שמות מקטים לחיפוש
-    const skus = db.get('skus').value().slice(0, 800);
-    const skuList = skus.map(s => `${s.id}: ${s.name}`).join('\n');
+    const fileData = req.file.buffer.toString('base64');
+    const skus = await prisma.sku.findMany({ take: 800 });
+    const skuList = skus.map(s => `${s.code}: ${s.name}`).join('\n');
     const prompt = `אתה מסייע לארכיון מסמכי כשרות של חברת יבוא מזון ישראלית.
 
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
@@ -584,16 +608,14 @@ ${skuList}
     if (!response.ok) throw new Error(data.error?.message || 'שגיאת API');
     const text = data.content[0].text.replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
-    // הוסף פרטי מקטים מלאים
-    result.suggested_skus = (result.suggested_skus || []).map(id => {
-      const sku = db.get('skus').find({ id: String(id) }).value();
-      return sku || { id: String(id), name: '', supplier: '' };
-    }).filter(s => s.name);
-    // נקה קובץ זמני
-    if (fs2.existsSync(fp)) fs2.unlinkSync(fp);
+    const suggested = [];
+    for (const id of (result.suggested_skus || [])) {
+      const sku = await prisma.sku.findUnique({ where: { code: String(id) } });
+      if (sku) suggested.push(skuOut(sku));
+    }
+    result.suggested_skus = suggested;
     res.json(result);
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
 });
-

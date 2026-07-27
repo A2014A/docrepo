@@ -1,0 +1,7 @@
+node_modules/
+.env
+.env.local
+
+# obsolete lowdb/local-disk storage -- data now lives in Postgres + R2
+data/
+uploads/

@@ -1,0 +1,199 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  PROCUREMENT
+  SALES
+  CUSTOMER
+}
+
+enum CertType {
+  ANNUAL
+  PER_PRODUCTION
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum LinkDocType {
+  RABBINATE
+  BADATZ_CERT
+  BADATZ_REPORT
+  DOCUMENT
+}
+
+enum BadatzDocType {
+  CERT
+  PRODUCTION_REPORT
+}
+
+enum RequestChannel {
+  EMAIL
+  WHATSAPP
+}
+
+enum RequestStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  phone        String?
+  role         Role     @default(ADMIN)
+  customerId   Int?
+  customer     Customer? @relation(fields: [customerId], references: [id])
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  uploadedDocuments Document[]     @relation("uploadedBy")
+  reviewedLinks     SkuLink[]      @relation("reviewedBy")
+  requestedCerts    CertRequest[]  @relation("requestedBy")
+  fulfilledCerts    CertRequest[]  @relation("fulfilledBy")
+}
+
+model Customer {
+  id          Int    @id @default(autoincrement())
+  name        String
+  contactInfo String?
+  users       User[]
+}
+
+model Category {
+  id   Int    @id @default(autoincrement())
+  name String @unique
+  skus Sku[]
+}
+
+model Sku {
+  id               Int       @id @default(autoincrement())
+  code             String    @unique // מק"ט
+  name             String
+  categoryId       Int?
+  category         Category? @relation(fields: [categoryId], references: [id])
+  supplier         String?
+  supplier2        String?
+  tipus            String?
+  sourceFlag       String?
+  responsible      String?
+  certType         CertType?
+  kashrutBodyRef   String?
+  pesachStatusRef  String?
+  notes            String?
+  active           Boolean   @default(true)
+
+  // provenance / new-SKU detection
+  origin           String[]  @default([])
+  firstSeenAt      DateTime  @default(now())
+  reviewedAt       DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  links            SkuLink[]
+  certRequests     CertRequest[]
+
+  @@index([categoryId])
+}
+
+model RabbinateCert {
+  id                 Int       @id @default(autoincrement())
+  refNumber          String?
+  matchedProductText String?
+  status             String?
+  kashrutBody        String?
+  expiryDate         DateTime?
+  fileUrl            String?
+  createdAt          DateTime  @default(now())
+
+  links SkuLink[]
+}
+
+model BadatzDoc {
+  id            Int           @id @default(autoincrement())
+  docType       BadatzDocType
+  kashrutBody   String?
+  manufacturer  String?
+  productsText  String?
+  expiryDate    DateTime?
+  fileUrl       String?
+  createdAt     DateTime      @default(now())
+
+  links SkuLink[]
+}
+
+model Document {
+  id             Int       @id @default(autoincrement())
+  title          String?
+  description    String?
+  docType        String?
+  docExt         String?
+  sizeBytes      Int?
+  tags           String[]  @default([])
+  fileUrl        String
+  expiryDate     DateTime?
+  productionDate DateTime?
+  hidden         Boolean   @default(false)
+  uploadedById   Int?
+  uploadedBy     User?     @relation("uploadedBy", fields: [uploadedById], references: [id])
+  createdAt      DateTime  @default(now())
+
+  links SkuLink[]
+}
+
+model SkuLink {
+  id                Int             @id @default(autoincrement())
+  skuId             Int
+  sku               Sku             @relation(fields: [skuId], references: [id])
+  docType           LinkDocType
+  rabbinateCertId   Int?
+  rabbinateCert     RabbinateCert?  @relation(fields: [rabbinateCertId], references: [id])
+  badatzDocId       Int?
+  badatzDoc         BadatzDoc?      @relation(fields: [badatzDocId], references: [id])
+  documentId        Int?
+  document          Document?       @relation(fields: [documentId], references: [id])
+  approvalStatus    ApprovalStatus  @default(PENDING)
+  visibleToCustomer Boolean         @default(false)
+  reviewedById      Int?
+  reviewedBy        User?           @relation("reviewedBy", fields: [reviewedById], references: [id])
+  reviewedAt        DateTime?
+  createdAt         DateTime        @default(now())
+
+  @@index([skuId])
+}
+
+model CertRequest {
+  id                Int            @id @default(autoincrement())
+  skuId             Int
+  sku               Sku            @relation(fields: [skuId], references: [id])
+  requestedById     Int
+  requestedBy       User           @relation("requestedBy", fields: [requestedById], references: [id])
+  recipientName     String?
+  channel           RequestChannel
+  recipientAddress  String
+  status            RequestStatus  @default(PENDING)
+  fulfilledById     Int?
+  fulfilledBy       User?          @relation("fulfilledBy", fields: [fulfilledById], references: [id])
+  fulfilledAt       DateTime?
+  createdAt         DateTime       @default(now())
+}
+
+// Generic small key/value store for cross-process state that must survive
+// Render restarts -- e.g. the Drive watcher's "last checked" timestamp.
+model SyncState {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
