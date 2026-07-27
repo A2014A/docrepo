@@ -184,6 +184,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openSkuManager()">⚙ ניהול מקטים</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRoleCodes()">🔑 ניהול קודי גישה</button>
+      <button class="btn btn-outline" id="unlinkedToggleBtn" style="width:100%;padding:8px;margin-top:8px" onclick="toggleUnlinkedFilter()">🔗 מסמכים לא מקושרים למקט</button>
     </div>
   </aside>
   <section>
@@ -345,7 +346,7 @@ function expiryBadge(dateStr){
   if(days<=30)return`<span class="expiry-badge expiry-soon">⏳ תוקף עד ${fmt} (${days} ימים)</span>`;
   return`<span class="expiry-badge expiry-ok">✓ תוקף עד ${fmt}</span>`;
 }
-let currentUser=null,activeTag='הכל',activeDoctype='הכל';
+let currentUser=null,activeTag='הכל',activeDoctype='הכל',showUnlinkedOnly=false;
 let editTags=[],chosenFiles=[],editingDocId=null,searchTimer=null;
 // per-file tag state: array of arrays
 let fileTags=[];
@@ -383,8 +384,17 @@ async function apiFetch(path,opts={}){
 async function loadStats(){
   try{
     const s=await apiFetch('/api/stats');
-    document.getElementById('statsBar').innerHTML=`<div class="stat-item"><strong>${s.total}</strong> מסמכים</div><div class="stat-item"><strong>${s.tags}</strong> תויות</div><div class="stat-item"><strong>${s.types}</strong> סוגי קבצים</div>`;
+    document.getElementById('statsBar').innerHTML=`<div class="stat-item"><strong>${s.total}</strong> מסמכים</div><div class="stat-item"><strong>${s.tags}</strong> תויות</div><div class="stat-item"><strong>${s.types}</strong> סוגי קבצים</div>${s.unlinked?`<div class="stat-item"><strong>${s.unlinked}</strong> לא מקושרים למקט</div>`:''}`;
+    const btn=document.getElementById('unlinkedToggleBtn');
+    if(btn)btn.textContent=`🔗 מסמכים לא מקושרים למקט (${s.unlinked||0})`;
   }catch{}
+}
+
+function toggleUnlinkedFilter(){
+  showUnlinkedOnly=!showUnlinkedOnly;
+  const btn=document.getElementById('unlinkedToggleBtn');
+  if(btn)btn.className='btn '+(showUnlinkedOnly?'btn-accent':'btn-outline');
+  loadDocs();
 }
 
 async function loadTags(){
@@ -407,12 +417,14 @@ async function loadDocs(){
   if(q)params.set('q',q);
   if(activeTag!=='הכל')params.set('tag',activeTag);
   if(activeDoctype!=='הכל')params.set('doctype',activeDoctype);
+  if(showUnlinkedOnly)params.set('unlinked','1');
   const grid=document.getElementById('docsGrid');
   grid.innerHTML='<div class="loading"><div class="spinner"></div>טוען...</div>';
   try{
     const docs=await apiFetch('/api/docs?'+params);
-    document.getElementById('resultsInfo').innerHTML=`נמצאו <strong>${docs.length}</strong> מסמכים`;
-    if(!docs.length){grid.innerHTML=`<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg><p>לא נמצאו מסמכים</p></div>`;return;}
+    const label=showUnlinkedOnly?'מסמכים לא מקושרים':'מסמכים';
+    document.getElementById('resultsInfo').innerHTML=`נמצאו <strong>${docs.length}</strong> ${label}`;
+    if(!docs.length){grid.innerHTML=`<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg><p>${showUnlinkedOnly?'כל המסמכים מקושרים למקט 🎉':'לא נמצאו מסמכים'}</p></div>`;return;}
     grid.innerHTML=docs.map((d,i)=>renderCard(d,i)).join('');
   }catch(e){grid.innerHTML=`<div class="empty-state"><p>שגיאה: ${e.message}</p></div>`;}
 }

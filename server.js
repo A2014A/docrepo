@@ -131,12 +131,30 @@ function skuOut(s) {
   };
 }
 
-async function docOut(d) {
-  const links = await prisma.skuLink.findMany({
-    where: { docType: 'DOCUMENT', documentId: d.id },
-    include: { sku: true },
-  });
-  const uploaderUser = d.uploadedById ? await prisma.user.findUnique({ where: { id: d.uploadedById } }) : null;
+// Batch-fetch context for docOut() -- calling prisma.skuLink.findMany() once
+// per document (via Promise.all over a whole list) exhausted the connection
+// pool once the document count grew past a few hundred (P2024). Fetch
+// everything needed for a whole list in 2 queries instead of 2*N.
+async function batchDocContext(docIds) {
+  const [links, users] = await Promise.all([
+    prisma.skuLink.findMany({
+      where: { docType: 'DOCUMENT', documentId: { in: docIds } },
+      include: { sku: true },
+    }),
+    prisma.user.findMany(),
+  ]);
+  const linksByDoc = new Map();
+  for (const l of links) {
+    if (!linksByDoc.has(l.documentId)) linksByDoc.set(l.documentId, []);
+    linksByDoc.get(l.documentId).push(l);
+  }
+  const usersById = new Map(users.map(u => [u.id, u]));
+  return { linksByDoc, usersById };
+}
+
+function docOut(d, ctx) {
+  const links = ctx.linksByDoc.get(d.id) || [];
+  const uploaderUser = d.uploadedById ? ctx.usersById.get(d.uploadedById) : null;
   return {
     id: d.id,
     name: d.title || '',
@@ -285,9 +303,20 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), ah(async (req, 
 }));
 
 app.get('/api/skus/report', requireAuth, ah(async (req, res) => {
-  const skus = await prisma.sku.findMany();
-  const report = await Promise.all(skus.map(async s => {
-    const links = await prisma.skuLink.findMany({ where: { skuId: s.id }, include: { document: true } });
+  // one query for all SKUs' links instead of one query per SKU (was
+  // exhausting the connection pool at real data volume -- see docOut/
+  // batchDocContext above for the same fix on the documents side).
+  const [skus, allLinks] = await Promise.all([
+    prisma.sku.findMany(),
+    prisma.skuLink.findMany({ include: { document: true } }),
+  ]);
+  const linksBySku = new Map();
+  for (const l of allLinks) {
+    if (!linksBySku.has(l.skuId)) linksBySku.set(l.skuId, []);
+    linksBySku.get(l.skuId).push(l);
+  }
+  const report = skus.map(s => {
+    const links = linksBySku.get(s.id) || [];
     const withDocs = links.filter(l => l.document);
     return {
       ...skuOut(s),
@@ -299,7 +328,7 @@ app.get('/api/skus/report', requireAuth, ah(async (req, res) => {
         size_label: fmtSize(l.document.sizeBytes || 0), ext: l.document.docExt || '',
       })),
     };
-  }));
+  });
   res.json(report);
 }));
 
@@ -309,7 +338,12 @@ app.get('/api/stats', ah(async (req, res) => {
   const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
   const tags  = new Set(docs.flatMap(d => d.tags || []));
   const types = new Set(docs.map(d => d.docExt).filter(Boolean));
-  res.json({ total: docs.length, tags: tags.size, types: types.size });
+  const linkedIds = new Set(
+    (await prisma.skuLink.findMany({ where: { docType: 'DOCUMENT' }, select: { documentId: true } }))
+      .map(l => l.documentId)
+  );
+  const unlinked = docs.filter(d => !linkedIds.has(d.id)).length;
+  res.json({ total: docs.length, tags: tags.size, types: types.size, unlinked });
 }));
 
 /* ── TAGS ── */
@@ -332,7 +366,7 @@ app.get('/api/doctypes', ah(async (req, res) => {
 
 /* ── GET DOCS ── */
 app.get('/api/docs', ah(async (req, res) => {
-  const { q, tag, doctype, sort = 'date-desc' } = req.query;
+  const { q, tag, doctype, sort = 'date-desc', unlinked } = req.query;
   const admin = isAdminReq(req);
   const where = {};
   if (!admin) where.hidden = false;
@@ -346,7 +380,10 @@ app.get('/api/docs', ah(async (req, res) => {
     { createdAt: 'desc' };
 
   let docs = await prisma.document.findMany({ where, orderBy });
-  const out = await Promise.all(docs.map(docOut));
+  const ctx = await batchDocContext(docs.map(d => d.id));
+  let out = docs.map(d => docOut(d, ctx));
+
+  if (unlinked === '1') out = out.filter(d => (d.skus||[]).length === 0);
 
   const filtered = q ? out.filter(d => {
     const lq = q.toLowerCase();
@@ -388,7 +425,7 @@ app.post('/api/docs', requireAssistant, upload.single('file'), ah(async (req, re
       data: { skuId: sku.id, docType: 'DOCUMENT', documentId: doc.id, approvalStatus: 'APPROVED', visibleToCustomer: false },
     });
   }
-  res.status(201).json(await docOut(doc));
+  res.status(201).json(docOut(doc, await batchDocContext([doc.id])));
 }));
 
 /* ── POST multi ── */
@@ -398,7 +435,7 @@ app.post('/api/docs/multi', requireAuth, upload.array('files', 50), ah(async (re
   const description = req.body.description || '';
   const doctype     = req.body.doctype || '';
   const hidden      = req.body.hidden === 'true';
-  const created     = [];
+  const createdDocs = [];
   for (const file of req.files) {
     const ext = path.extname(file.originalname).replace('.','').toLowerCase();
     const key = r2KeyFor(file.originalname);
@@ -409,9 +446,10 @@ app.post('/api/docs/multi', requireAuth, upload.array('files', 50), ah(async (re
         sizeBytes: file.size, tags: [...tags], hidden, fileUrl: key, uploadedById: req.user.id || null,
       },
     });
-    created.push(await docOut(doc));
+    createdDocs.push(doc);
   }
-  res.status(201).json(created);
+  const ctx = await batchDocContext(createdDocs.map(d => d.id));
+  res.status(201).json(createdDocs.map(d => docOut(d, ctx)));
 }));
 
 /* ── PATCH ── */
@@ -439,7 +477,7 @@ app.patch('/api/docs/:id', requireAssistant, ah(async (req, res) => {
       });
     }
   }
-  res.json(await docOut(updated));
+  res.json(docOut(updated, await batchDocContext([updated.id])));
 }));
 
 /* ── DELETE ── */
