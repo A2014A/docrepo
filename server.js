@@ -56,6 +56,18 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Express 4 does not catch rejected promises from async route handlers --
+// an unhandled rejection there can crash the whole process. Wrap every
+// async handler so an error becomes a normal 500 response instead.
+function ah(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch((e) => {
+    console.error(e);
+    if (!res.headersSent) res.status(500).json({ error: e.message || 'שגיאת שרת' });
+  });
+}
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e));
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e));
+
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -86,18 +98,23 @@ function requireAdmin(req, res, next) {
 
 /* middleware: מנהל או עוזר (JWT או קוד עוזר) */
 async function requireAssistant(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (token) {
-    try { req.user = jwt.verify(token, JWT_SECRET); return next(); } catch {}
+  try {
+    const header = req.headers.authorization || '';
+    const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (token) {
+      try { req.user = jwt.verify(token, JWT_SECRET); return next(); } catch {}
+    }
+    const code = req.headers['x-assistant-code'] || '';
+    const ac = await getSetting('assistant_code');
+    if (code && code === ac) {
+      req.user = { username: 'assistant', role: 'assistant' };
+      return next();
+    }
+    return res.status(401).json({ error: 'לא מחובר' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'שגיאת שרת' });
   }
-  const code = req.headers['x-assistant-code'] || '';
-  const ac = await getSetting('assistant_code');
-  if (code && code === ac) {
-    req.user = { username: 'assistant', role: 'assistant' };
-    return next();
-  }
-  return res.status(401).json({ error: 'לא מחובר' });
 }
 
 function fmtSize(bytes) {
@@ -141,7 +158,7 @@ async function docOut(d) {
 }
 
 /* ── TEMP RESET (להסרה אחרי שימוש) ── */
-app.get('/api/reset-admin-password', async (req, res) => {
+app.get('/api/reset-admin-password', ah(async (req, res) => {
   const user = await prisma.user.findUnique({ where: { email: 'admin' } });
   if (user) {
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash: bcrypt.hashSync('1234', 10) } });
@@ -149,10 +166,10 @@ app.get('/api/reset-admin-password', async (req, res) => {
   } else {
     res.json({ ok: false, message: 'משתמש admin לא נמצא' });
   }
-});
+}));
 
 /* ── AUTH ── */
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', ah(async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'חסרים פרטים' });
   const user = await prisma.user.findUnique({ where: { email: username } });
@@ -161,19 +178,19 @@ app.post('/api/auth/login', async (req, res) => {
   const role = user.role.toLowerCase();
   const token = jwt.sign({ id: user.id, username: user.email, role }, JWT_SECRET, { expiresIn: '8h' });
   res.json({ token, username: user.email, role });
-});
+}));
 
-app.patch('/api/auth/password', requireAuth, requireAdmin, async (req, res) => {
+app.patch('/api/auth/password', requireAuth, requireAdmin, ah(async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!bcrypt.compareSync(currentPassword, user.passwordHash))
     return res.status(400).json({ error: 'סיסמה נוכחית שגויה' });
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash: bcrypt.hashSync(newPassword, 10) } });
   res.json({ ok: true });
-});
+}));
 
 /* ── SKUS ── */
-app.get('/api/skus', async (req, res) => {
+app.get('/api/skus', ah(async (req, res) => {
   const { q, all } = req.query;
   const where = q ? {
     OR: [
@@ -184,9 +201,9 @@ app.get('/api/skus', async (req, res) => {
   } : {};
   const skus = await prisma.sku.findMany({ where, take: all ? undefined : 50 });
   res.json(skus.map(skuOut));
-});
+}));
 
-app.post('/api/skus', requireAuth, async (req, res) => {
+app.post('/api/skus', requireAuth, ah(async (req, res) => {
   const { id, name, supplier, tipus, source, responsible, kashrus, pesach, notes } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'חסרים מספר ושם' });
   if (await prisma.sku.findUnique({ where: { code: String(id) } }))
@@ -200,9 +217,9 @@ app.post('/api/skus', requireAuth, async (req, res) => {
     },
   });
   res.status(201).json(skuOut(sku));
-});
+}));
 
-app.patch('/api/skus/:id', requireAuth, async (req, res) => {
+app.patch('/api/skus/:id', requireAuth, ah(async (req, res) => {
   const sku = await prisma.sku.findUnique({ where: { code: req.params.id } });
   if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
   const { name, supplier, tipus, source, responsible, kashrus, pesach, notes } = req.body;
@@ -218,17 +235,17 @@ app.patch('/api/skus/:id', requireAuth, async (req, res) => {
   updates.reviewedAt = new Date();
   const updated = await prisma.sku.update({ where: { code: req.params.id }, data: updates });
   res.json(skuOut(updated));
-});
+}));
 
-app.delete('/api/skus/:id', requireAuth, requireAdmin, async (req, res) => {
+app.delete('/api/skus/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const sku = await prisma.sku.findUnique({ where: { code: req.params.id } });
   if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
   await prisma.skuLink.deleteMany({ where: { skuId: sku.id } });
   await prisma.sku.delete({ where: { id: sku.id } });
   res.json({ ok: true });
-});
+}));
 
-app.post('/api/skus/import', requireAuth, upload.single('file'), async (req, res) => {
+app.post('/api/skus/import', requireAuth, upload.single('file'), ah(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
   try {
     const XLSX = require('xlsx');
@@ -265,9 +282,9 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), async (req, res
   } catch(e) {
     res.status(500).json({ error: 'שגיאה בקריאת הקובץ: ' + e.message });
   }
-});
+}));
 
-app.get('/api/skus/report', requireAuth, async (req, res) => {
+app.get('/api/skus/report', requireAuth, ah(async (req, res) => {
   const skus = await prisma.sku.findMany();
   const report = await Promise.all(skus.map(async s => {
     const links = await prisma.skuLink.findMany({ where: { skuId: s.id }, include: { document: true } });
@@ -284,37 +301,37 @@ app.get('/api/skus/report', requireAuth, async (req, res) => {
     };
   }));
   res.json(report);
-});
+}));
 
 /* ── STATS ── */
-app.get('/api/stats', async (req, res) => {
+app.get('/api/stats', ah(async (req, res) => {
   const admin = isAdminReq(req);
   const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
   const tags  = new Set(docs.flatMap(d => d.tags || []));
   const types = new Set(docs.map(d => d.docExt).filter(Boolean));
   res.json({ total: docs.length, tags: tags.size, types: types.size });
-});
+}));
 
 /* ── TAGS ── */
-app.get('/api/tags', async (req, res) => {
+app.get('/api/tags', ah(async (req, res) => {
   const admin = isAdminReq(req);
   const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
   const map = {};
   docs.forEach(d => (d.tags||[]).forEach(t => { map[t] = (map[t]||0)+1; }));
   res.json(Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([tag,count])=>({ tag, count })));
-});
+}));
 
 /* ── DOCTYPES ── */
-app.get('/api/doctypes', async (req, res) => {
+app.get('/api/doctypes', ah(async (req, res) => {
   const admin = isAdminReq(req);
   const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
   const map = {};
   docs.forEach(d => { if (d.docType) map[d.docType] = (map[d.docType]||0)+1; });
   res.json(Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([doctype,count])=>({ doctype, count })));
-});
+}));
 
 /* ── GET DOCS ── */
-app.get('/api/docs', async (req, res) => {
+app.get('/api/docs', ah(async (req, res) => {
   const { q, tag, doctype, sort = 'date-desc' } = req.query;
   const admin = isAdminReq(req);
   const where = {};
@@ -341,10 +358,10 @@ app.get('/api/docs', async (req, res) => {
   }) : out;
 
   res.json(filtered);
-});
+}));
 
 /* ── POST single ── */
-app.post('/api/docs', requireAssistant, upload.single('file'), async (req, res) => {
+app.post('/api/docs', requireAssistant, upload.single('file'), ah(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
   const { name, description, tags, doctype, hidden, skus, expiry_date, production_date } = req.body;
   const docName    = name || req.file.originalname.replace(/\.[^.]+$/,'');
@@ -372,10 +389,10 @@ app.post('/api/docs', requireAssistant, upload.single('file'), async (req, res) 
     });
   }
   res.status(201).json(await docOut(doc));
-});
+}));
 
 /* ── POST multi ── */
-app.post('/api/docs/multi', requireAuth, upload.array('files', 50), async (req, res) => {
+app.post('/api/docs/multi', requireAuth, upload.array('files', 50), ah(async (req, res) => {
   if (!req.files || !req.files.length) return res.status(400).json({ error: 'לא נבחרו קבצים' });
   const tags        = req.body.tags ? JSON.parse(req.body.tags).map(t=>t.trim()).filter(Boolean) : ['כללי'];
   const description = req.body.description || '';
@@ -395,10 +412,10 @@ app.post('/api/docs/multi', requireAuth, upload.array('files', 50), async (req, 
     created.push(await docOut(doc));
   }
   res.status(201).json(created);
-});
+}));
 
 /* ── PATCH ── */
-app.patch('/api/docs/:id', requireAssistant, async (req, res) => {
+app.patch('/api/docs/:id', requireAssistant, ah(async (req, res) => {
   const id  = parseInt(req.params.id);
   const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
@@ -423,10 +440,10 @@ app.patch('/api/docs/:id', requireAssistant, async (req, res) => {
     }
   }
   res.json(await docOut(updated));
-});
+}));
 
 /* ── DELETE ── */
-app.delete('/api/docs/:id', requireAuth, requireAdmin, async (req, res) => {
+app.delete('/api/docs/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   const id  = parseInt(req.params.id);
   const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
@@ -435,41 +452,41 @@ app.delete('/api/docs/:id', requireAuth, requireAdmin, async (req, res) => {
   res.json({ ok: true });
   // note: intentionally not deleting the R2 object -- keep it recoverable; a
   // separate cleanup pass can reap orphaned keys later if storage cost matters.
-});
+}));
 
 /* ── ROLE CODES ── */
-app.get('/api/role-code/check', async (req, res) => {
+app.get('/api/role-code/check', ah(async (req, res) => {
   const { code } = req.query;
   const ac = await getSetting('assistant_code');
   const vc = await getSetting('viewer_code');
   if (code === ac) return res.json({ ok: true, role: 'assistant' });
   if (code === vc) return res.json({ ok: true, role: 'viewer' });
   res.json({ ok: false });
-});
+}));
 
-app.patch('/api/role-codes', requireAuth, requireAdmin, async (req, res) => {
+app.patch('/api/role-codes', requireAuth, requireAdmin, ah(async (req, res) => {
   const { assistant_code, viewer_code } = req.body;
   if (assistant_code !== undefined) await setSetting('assistant_code', assistant_code);
   if (viewer_code    !== undefined) await setSetting('viewer_code', viewer_code);
   res.json({ ok: true });
-});
+}));
 
 /* ── VIEW CODE ── */
-app.get('/api/view-code/check', async (req, res) => {
+app.get('/api/view-code/check', ah(async (req, res) => {
   const { code } = req.query;
   const stored = await getSetting('view_code');
   res.json({ ok: code === stored });
-});
+}));
 
-app.patch('/api/view-code', requireAuth, requireAdmin, async (req, res) => {
+app.patch('/api/view-code', requireAuth, requireAdmin, ah(async (req, res) => {
   const { code } = req.body;
   if (!code || code.length < 2) return res.status(400).json({ error: 'קוד קצר מדי' });
   await setSetting('view_code', code);
   res.json({ ok: true });
-});
+}));
 
 /* ── DOWNLOAD ── */
-app.get('/api/docs/:id/download', async (req, res) => {
+app.get('/api/docs/:id/download', ah(async (req, res) => {
   const doc = await prisma.document.findUnique({ where: { id: parseInt(req.params.id) } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
   if (doc.hidden && !isAssistantReq(req)) return res.status(403).json({ error: 'אין גישה' });
@@ -485,10 +502,10 @@ app.get('/api/docs/:id/download', async (req, res) => {
   } catch (e) {
     res.status(404).json({ error: 'הקובץ לא נמצא' });
   }
-});
+}));
 
 /* ── IDENTIFY BY DOC ID ── */
-app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
+app.post('/api/identify-by-id/:id', requireAssistant, ah(async (req, res) => {
   const doc = await prisma.document.findUnique({ where: { id: parseInt(req.params.id) } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
   const ext = (doc.docExt || '').toLowerCase();
@@ -553,7 +570,7 @@ app.post('/api/identify-by-id/:id', requireAssistant, async (req, res) => {
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
-});
+}));
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
 
@@ -563,7 +580,7 @@ app.listen(PORT, () => {
 });
 
 /* ── AI IDENTIFY ── */
-app.post('/api/identify', requireAssistant, upload.single('file'), async (req, res) => {
+app.post('/api/identify', requireAssistant, upload.single('file'), ah(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY לא מוגדר' });
@@ -618,4 +635,4 @@ ${skuList}
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
-});
+}));
