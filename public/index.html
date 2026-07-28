@@ -277,13 +277,8 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
     <div class="form-group"><label class="form-label">שם המסמך</label><input type="text" class="form-input" id="editName"/></div>
     <div class="form-group">
       <label class="form-label">סוג מסמך</label>
-      <select class="form-select" id="editDocType">
+      <select class="form-select" id="editDocType" onchange="applyDoctypeHiddenDefault('editDocType','editHidden')">
         <option value="">— בחר סוג —</option>
-        <option value="בקשות">בקשות</option>
-        <option value="תעודות כשרות">תעודות כשרות</option>
-        <option value="דוחות יצור">דוחות יצור</option>
-        <option value="אישורי רבנות">אישורי רבנות</option>
-        <option value="אחר">אחר</option>
       </select>
     </div>
     <div class="form-group">
@@ -389,6 +384,17 @@ let editTags=[],chosenFiles=[],editingDocId=null,searchTimer=null;
 let fileTags=[];
 
 const DOCTYPE_OPTIONS=['תעודות בדצים','תעודות רבנות','בקשות לרבנות','דוחות בדצים ואישורי תויות','תויות','מכתבים אחרים'];
+// default visibility rule: only final certificates are visible to
+// non-admin roles (assistant/viewer); requests, reports, labels and other
+// letters default to admin-only. Suggested when a doctype is picked --
+// staff can still flip the toggle manually afterward.
+const VISIBLE_DOCTYPES=['תעודות בדצים','תעודות רבנות'];
+function applyDoctypeHiddenDefault(selectId,hiddenCheckboxId){
+  const doctype=document.getElementById(selectId)?.value;
+  const cb=document.getElementById(hiddenCheckboxId);
+  if(!doctype||!cb)return;
+  cb.checked=!VISIBLE_DOCTYPES.includes(doctype);
+}
 
 function authHeaders(){
   if (token) return {'Authorization': 'Bearer ' + token};
@@ -615,7 +621,7 @@ function onFilesChosen(inp){
         </div>
         <div class="form-group">
           <label class="form-label">סוג מסמך</label>
-          <select class="form-select" id="ftype_${i}">
+          <select class="form-select" id="ftype_${i}" onchange="applyDoctypeHiddenDefault('ftype_${i}','fhidden_${i}')">
             <option value="">— בחר סוג —</option>
             ${dtOpts}
           </select>
@@ -837,7 +843,10 @@ function applyBulkToAll(){
   const doctype=document.getElementById('bulkDoctype').value;
   let applied=0;
   chosenFiles.forEach((_,i)=>{
-    if(doctype && document.getElementById('ftype_'+i)) document.getElementById('ftype_'+i).value=doctype;
+    if(doctype && document.getElementById('ftype_'+i)){
+      document.getElementById('ftype_'+i).value=doctype;
+      applyDoctypeHiddenDefault('ftype_'+i,'fhidden_'+i);
+    }
     if(bulkTags.length){
       fileTags[i]=[...new Set([...(fileTags[i]||[]),...bulkTags])];
       renderFilePills(i);
@@ -866,6 +875,7 @@ async function openEdit(id){
   editingDocId=id;editTags=[...(d.tags||[])];editSkus=[...(d.skus||[])];
   document.getElementById('editName').value=d.name;
   document.getElementById('editDesc').value=d.description||'';
+  document.getElementById('editDocType').innerHTML='<option value="">— בחר סוג —</option>'+DOCTYPE_OPTIONS.map(o=>`<option value="${o}">${o}</option>`).join('');
   document.getElementById('editDocType').value=d.doctype||'';
   document.getElementById('editHidden').checked=!!d.hidden;
   document.getElementById('editProd').value=d.production_date||'';
