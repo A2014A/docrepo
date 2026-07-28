@@ -38,7 +38,7 @@ const BASE = 'G:\\האחסון שלי\\אישורי כשרות מהרבנות';
 const FOLDERS = [
   { dir: 'אישורים', docType: 'אישורי רבנות', hidden: false },
   { dir: 'בקשות', docType: 'בקשות', hidden: true },
-  { dir: 'תעודות ודוחות גופי כשרות', docType: 'בד"ץ (טרם מסווג)', hidden: true },
+  { dir: 'תעודות ודוחות גופי כשרות', docType: 'בד״ץ (טרם מסווג)', hidden: true }, // ״ = Hebrew gershayim (U+05F4), not ASCII " -- an ASCII quote here broke the sidebar filter button's onclick="" HTML attribute
   { dir: 'הודעות אחרות', docType: 'אחר', hidden: true },
 ];
 

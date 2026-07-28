@@ -358,6 +358,14 @@ function canUploadEdit() {
 function canViewDownload() {
   return !!effectiveRole();
 }
+// Safe to embed as a single-quoted JS string argument inside a
+// double-quoted HTML onclick="..." attribute. A doctype value containing a
+// literal " (e.g. 'בד"ץ...') broke the sidebar button entirely -- it
+// closed the onclick="" attribute early -- because only the JS-string
+// single-quote was ever escaped, not the surrounding HTML attribute quote.
+function jsAttr(s){
+  return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\n/g,'\\n');
+}
 function canPreview(ext) {
   return ['pdf','jpg','jpeg','png','gif','webp','doc','docx','xls','xlsx','ppt','pptx'].includes((ext||'').toLowerCase());
 }
@@ -431,10 +439,10 @@ async function loadTags(){
     const[tags,dtypes,stats]=await Promise.all([apiFetch('/api/tags'),apiFetch('/api/doctypes'),apiFetch('/api/stats')]);
     const total=stats.total;
     document.getElementById('doctypeList').innerHTML=[{doctype:'הכל',count:total},...dtypes].map(({doctype,count})=>
-      `<button class="tag-btn${doctype===activeDoctype?' active':''}" onclick="setDoctype('${doctype}')"><span>${doctype}</span><span class="tag-count">${count}</span></button>`
+      `<button class="tag-btn${doctype===activeDoctype?' active':''}" onclick="setDoctype('${jsAttr(doctype)}')"><span>${doctype}</span><span class="tag-count">${count}</span></button>`
     ).join('');
     document.getElementById('tagList').innerHTML=[{tag:'הכל',count:total},...tags].map(({tag,count})=>
-      `<button class="tag-btn${tag===activeTag?' active':''}" onclick="setTag('${tag}')"><span>${tag}</span><span class="tag-count">${count}</span></button>`
+      `<button class="tag-btn${tag===activeTag?' active':''}" onclick="setTag('${jsAttr(tag)}')"><span>${tag}</span><span class="tag-count">${count}</span></button>`
     ).join('');
   }catch{}
 }
@@ -485,10 +493,10 @@ function renderCard(d,i){
     ${(d.skus||[]).length?`<div class="doc-skus">${d.skus.map(s=>`<span class="sku-pill" style="font-size:.72rem">${s.id} — ${s.name.length>24?s.name.slice(0,24)+'…':s.name}</span>`).join('')}</div>`:''}
     ${isAdm&&d.expiry_date?`<div style="margin-top:5px">${expiryBadge(d.expiry_date)}</div>`:''}
     <div class="doc-card-footer">
-      ${canPreview(d.ext)?`<button class="dl-btn" onclick="guardedView(${d.id},'${d.ext}','${d.name.replace(/'/g,"\\'")}')">
+      ${canPreview(d.ext)?`<button class="dl-btn" onclick="guardedView(${d.id},'${d.ext}','${jsAttr(d.name)}')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>צפה
       </button>`:''}
-      <button class="dl-btn" onclick="guardedDownload(${d.id},'${d.name.replace(/'/g,"\\'")}','${d.ext}')">
+      <button class="dl-btn" onclick="guardedDownload(${d.id},'${jsAttr(d.name)}','${d.ext}')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
       </button>
       ${isAdm?`
@@ -1380,7 +1388,7 @@ function renderSkuDocs() {
             <td style="padding:8px 10px;text-align:center;color:var(--ink3)">${d.production_date ? new Date(d.production_date).toLocaleDateString('he-IL') : '—'}</td>
             <td style="padding:8px 10px;text-align:center">${d.expiry_date ? expiryBadge(d.expiry_date) : '—'}</td>
             <td style="padding:8px 10px;text-align:center">
-              <button onclick="guardedDownload(${d.id},'${d.name}','${d.ext}')" style="font-size:.78rem;padding:5px 12px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--ink2);cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+              <button onclick="guardedDownload(${d.id},'${jsAttr(d.name)}','${d.ext}')" style="font-size:.78rem;padding:5px 12px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--ink2);cursor:pointer;display:inline-flex;align-items:center;gap:4px">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
               </button>
             </td>
@@ -1452,7 +1460,7 @@ async function openViewer(id, ext, name) {
   } else {
     body.innerHTML = `<div style="text-align:center;color:var(--ink3);padding:3rem">
       <p style="font-size:1rem;margin-bottom:1rem">לא ניתן להציג קובץ מסוג זה</p>
-      <button class="btn btn-accent" onclick="guardedDownload(${id},'${name.replace(/'/g,"\\'")}','${ext}')">הורד קובץ</button>
+      <button class="btn btn-accent" onclick="guardedDownload(${id},'${jsAttr(name)}','${ext}')">הורד קובץ</button>
     </div>`;
   }
 }
