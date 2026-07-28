@@ -224,6 +224,35 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
     </div>
     <input type="file" id="fileInput" style="display:none" onchange="onFilesChosen(this)" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" multiple/>
     <input type="file" id="fileInputImg" style="display:none" onchange="onFilesChosen(this)" accept="image/*" multiple/>
+    <!-- מידע משותף לכמה קבצים יחד (למשל כמה תעודות לאותו מקט) -->
+    <div id="bulkApplyBar" class="file-form" style="display:none;background:var(--bg2);margin-bottom:10px">
+      <div class="file-form-header" style="border-bottom:1px solid var(--border2);padding-bottom:8px;margin-bottom:8px">
+        <strong style="font-size:.88rem">מידע משותף לכל הקבצים שנבחרו</strong>
+      </div>
+      <p style="font-size:.8rem;color:var(--ink2);margin-bottom:10px">אם כמה מהקבצים שייכים לאותו מקט/סוג — מלא כאן פעם אחת והחל על כולם, במקום למלא כל קובץ בנפרד.</p>
+      <div class="file-form-body">
+        <div class="form-group">
+          <label class="form-label">סוג מסמך</label>
+          <select class="form-select" id="bulkDoctype">
+            <option value="">— בחר סוג —</option>
+          </select>
+        </div>
+        <div class="form-group full">
+          <label class="form-label">תויות (הקלד ולחץ Enter)</label>
+          <div class="tags-input-wrap" id="bulkTagWrap" onclick="document.getElementById('bulkTagInput').focus()">
+            <input id="bulkTagInput" class="tag-input-bare" placeholder="הוסף תויה..." onkeydown="handleBulkTag(event)"/>
+          </div>
+        </div>
+        <div class="form-group full">
+          <label class="form-label">מקטים מקושרים</label>
+          <button type="button" class="btn btn-outline" style="width:100%;margin-bottom:6px" onclick="openSkuPicker('bulk')">
+            🔍 בחר מקטים
+          </button>
+          <div id="bulkSkuPills" class="tags-input-wrap" style="min-height:32px"></div>
+        </div>
+      </div>
+      <button type="button" class="btn btn-accent" style="margin-top:6px" onclick="applyBulkToAll()">⬇ החל על כל הקבצים</button>
+    </div>
     <!-- טפסים דינמיים לכל קובץ -->
     <div class="file-forms" id="fileForms"></div>
     <div class="modal-footer">
@@ -493,7 +522,8 @@ function closeUpload(){
   document.getElementById('fileInput').value='';
   document.getElementById('fileInputImg').value='';
   document.getElementById('fileForms').innerHTML='';
-  chosenFiles=[];fileTags=[];fileSkus={};
+  chosenFiles=[];fileTags=[];fileSkus={};bulkTags=[];bulkSkuSelection=[];
+  document.getElementById('bulkApplyBar').style.display='none';
   const btn=document.getElementById('uploadSubmitBtn');
   btn.disabled=false;btn.textContent='העלה';
 }
@@ -543,6 +573,17 @@ function onFilesChosen(inp){
   fileTags=chosenFiles.map(()=>[]);
   const container=document.getElementById('fileForms');
   const dtOpts=DOCTYPE_OPTIONS.map(o=>`<option value="${o}">${o}</option>`).join('');
+
+  const bulkBar=document.getElementById('bulkApplyBar');
+  if(chosenFiles.length>1){
+    bulkBar.style.display='block';
+    document.getElementById('bulkDoctype').innerHTML='<option value="">— בחר סוג —</option>'+dtOpts;
+    bulkTags=[];bulkSkuSelection=[];
+    renderBulkTagPills();
+    renderSkuPills('bulk');
+  } else {
+    bulkBar.style.display='none';
+  }
   container.innerHTML=chosenFiles.map((f,i)=>{
     const ext=f.name.split('.').pop().toLowerCase();
     const baseName=f.name.replace(/\.[^.]+$/,'');
@@ -717,6 +758,8 @@ function expiryBadge(dateStr){
 /* ══════════ SKU LOGIC ══════════ */
 let editSkus = [];
 let fileSkus = {};  // fileSkus[i] = array of {id,name,supplier}
+let bulkTags = [];
+let bulkSkuSelection = [];  // shared SKUs picked in the "apply to all files" bar
 
 let skuSearchTimer = null;
 async function skuSearch(mode, idx) {
@@ -751,18 +794,54 @@ function addSku(mode, idx, sku) {
 
 function removeSku(mode, idx, skuId) {
   if (mode==='edit') { editSkus=editSkus.filter(s=>s.id!==skuId); renderSkuPills('edit'); }
+  else if (mode==='bulk') { bulkSkuSelection=bulkSkuSelection.filter(s=>s.id!==skuId); renderSkuPills('bulk'); }
   else { fileSkus[idx]=(fileSkus[idx]||[]).filter(s=>s.id!==skuId); renderSkuPills('file',idx); }
 }
 
 function renderSkuPills(mode, idx) {
-  const pillsId = mode==='edit' ? 'editSkuPills' : `fskupills_${idx}`;
-  const arr = mode==='edit' ? editSkus : (fileSkus[idx]||[]);
+  const pillsId = mode==='edit' ? 'editSkuPills' : mode==='bulk' ? 'bulkSkuPills' : `fskupills_${idx}`;
+  const arr = mode==='edit' ? editSkus : mode==='bulk' ? bulkSkuSelection : (fileSkus[idx]||[]);
   const el = document.getElementById(pillsId); if(!el) return;
   el.innerHTML = arr.map(s =>
     `<span class="sku-pill">${s.id} — ${s.name.length>28?s.name.slice(0,28)+'…':s.name}
       <button onclick="removeSku('${mode}',${idx||0},'${s.id}')" aria-label="הסר">×</button>
     </span>`
   ).join('');
+}
+
+function handleBulkTag(e){
+  if(e.key==='Enter'||e.key===','){
+    e.preventDefault();
+    const v=e.target.value.trim().replace(/,$/,'');
+    if(v&&!bulkTags.includes(v)){bulkTags.push(v);renderBulkTagPills();}
+    e.target.value='';
+  }
+}
+function renderBulkTagPills(){
+  const wrap=document.getElementById('bulkTagWrap');
+  if(!wrap)return;
+  wrap.innerHTML=bulkTags.map((t,j)=>
+    `<span class="ti-pill">${t}<button onclick="bulkTags.splice(${j},1);renderBulkTagPills();" aria-label="הסר">×</button></span>`
+  ).join('')+`<input id="bulkTagInput" class="tag-input-bare" placeholder="${bulkTags.length?'':'הוסף תויה...'}" onkeydown="handleBulkTag(event)"/>`;
+}
+
+function applyBulkToAll(){
+  const doctype=document.getElementById('bulkDoctype').value;
+  let applied=0;
+  chosenFiles.forEach((_,i)=>{
+    if(doctype && document.getElementById('ftype_'+i)) document.getElementById('ftype_'+i).value=doctype;
+    if(bulkTags.length){
+      fileTags[i]=[...new Set([...(fileTags[i]||[]),...bulkTags])];
+      renderFilePills(i);
+    }
+    if(bulkSkuSelection.length){
+      if(!fileSkus[i])fileSkus[i]=[];
+      bulkSkuSelection.forEach(s=>{ if(!fileSkus[i].find(x=>x.id===s.id)) fileSkus[i].push(s); });
+      renderSkuPills('file',i);
+    }
+    applied++;
+  });
+  showToast(`הוחל על ${applied} קבצים`);
 }
 
 // Close dropdowns on outside click
@@ -1327,28 +1406,52 @@ function expiryBadge(dateStr){
   return`<span class="expiry-badge expiry-ok">✓ תוקף עד ${fmt}</span>`;
 }
 
-function openViewer(id, ext, name) {
-  const url = `/api/docs/${id}/download?inline=1`;
-  const dlUrl = `/api/docs/${id}/download`;
-  const googleViewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(window.location.origin + url)}&embedded=true`;
-  document.getElementById('viewerTitle').textContent = name;
-  document.getElementById('viewerDownload').href = dlUrl;
-  const body = document.getElementById('viewerBody');
-  const e = ext.toLowerCase();
+let viewerBlobUrl = null;
 
-  if (e === 'pdf') {
-    body.innerHTML = `<iframe src="${url}#toolbar=1&navpanes=0" style="width:100%;height:100%;border:none" type="application/pdf"></iframe>`;
-  } else if (['jpg','jpeg','png','gif','webp'].includes(e)) {
-    body.innerHTML = `<img src="${url}" style="max-width:100%;max-height:100%;object-fit:contain;padding:1rem" alt="${name}"/>`;
+async function openViewer(id, ext, name) {
+  // Direct <iframe>/<img> src="/api/docs/:id/download" never sends the
+  // Authorization header (plain browser navigation can't attach custom
+  // headers) -- worked by accident while every document was public, but
+  // fails with "אין גישה" for any hidden document. Fetch with the header
+  // ourselves and hand the viewer a local blob: URL instead.
+  document.getElementById('viewerTitle').textContent = name;
+  const dlBtn = document.getElementById('viewerDownload');
+  dlBtn.href = 'javascript:void(0)';
+  dlBtn.onclick = () => guardedDownload(id, name, ext);
+  const body = document.getElementById('viewerBody');
+  const e = (ext||'').toLowerCase();
+  document.getElementById('viewerModal').classList.add('open');
+  body.innerHTML = `<div class="loading"><div class="spinner"></div>טוען...</div>`;
+
+  if (viewerBlobUrl) { URL.revokeObjectURL(viewerBlobUrl); viewerBlobUrl = null; }
+
+  if (e === 'pdf' || ['jpg','jpeg','png','gif','webp'].includes(e)) {
+    try {
+      const res = await fetch(`/api/docs/${id}/download?inline=1`, { headers: authHeaders() });
+      if (!res.ok) { const j = await res.json().catch(()=>({error:'שגיאה'})); throw new Error(j.error||'שגיאה'); }
+      const blob = await res.blob();
+      viewerBlobUrl = URL.createObjectURL(blob);
+      if (e === 'pdf') {
+        body.innerHTML = `<iframe src="${viewerBlobUrl}#toolbar=1&navpanes=0" style="width:100%;height:100%;border:none" type="application/pdf"></iframe>`;
+      } else {
+        body.innerHTML = `<img src="${viewerBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain;padding:1rem" alt="${name}"/>`;
+      }
+    } catch(err) {
+      body.innerHTML = `<div style="text-align:center;color:var(--ink3);padding:3rem"><p>שגיאה בטעינת הקובץ: ${err.message}</p></div>`;
+    }
   } else if (['doc','docx','xls','xlsx','ppt','pptx'].includes(e)) {
+    // Google Docs Viewer fetches the URL itself (no auth header from us
+    // reaches it) -- fine for visible documents, not fixable the same way
+    // for hidden ones without a signed/expiring URL. None of the current
+    // library is this file type; revisit if that changes.
+    const googleViewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(window.location.origin + `/api/docs/${id}/download?inline=1`)}&embedded=true`;
     body.innerHTML = `<iframe src="${googleViewerUrl}" style="width:100%;height:100%;border:none"></iframe>`;
   } else {
     body.innerHTML = `<div style="text-align:center;color:var(--ink3);padding:3rem">
       <p style="font-size:1rem;margin-bottom:1rem">לא ניתן להציג קובץ מסוג זה</p>
-      <a href="${url}" download class="btn btn-accent">הורד קובץ</a>
+      <button class="btn btn-accent" onclick="guardedDownload(${id},'${name.replace(/'/g,"\\'")}','${ext}')">הורד קובץ</button>
     </div>`;
   }
-  document.getElementById('viewerModal').classList.add('open');
 }
 
 function closeViewer() {
@@ -1464,13 +1567,24 @@ function guardedDownload(id, name, ext) {
   openViewCodeModal();
 }
 
-function doDownload(id, name, ext) {
-  const a = document.createElement('a');
-  a.href = `/api/docs/${id}/download`;
-  a.download = name + (ext ? '.'+ext : '');
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+async function doDownload(id, name, ext) {
+  // same auth-header problem as openViewer() -- fetch it ourselves instead
+  // of pointing an <a href> straight at the API.
+  try {
+    const res = await fetch(`/api/docs/${id}/download`, { headers: authHeaders() });
+    if (!res.ok) { const j = await res.json().catch(()=>({error:'שגיאה בהורדה'})); throw new Error(j.error||'שגיאה בהורדה'); }
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = name + (ext ? '.'+ext : '');
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+  } catch(e) {
+    showToast(e.message);
+  }
 }
 
 function openViewCodeModal() {
@@ -1713,7 +1827,7 @@ async function openSkuPicker(mode, idx) {
 
   // הגדר נבחרים קיימים
   spSelected = new Set();
-  const existing = mode === 'edit' ? editSkus : (fileSkus[idx] || []);
+  const existing = mode === 'edit' ? editSkus : mode === 'bulk' ? bulkSkuSelection : (fileSkus[idx] || []);
   existing.forEach(s => spSelected.add(s.id));
 
   // נקה פילטרים
@@ -1810,6 +1924,9 @@ function confirmSkuPicker() {
   if (spMode === 'edit') {
     editSkus = chosen;
     renderSkuPills('edit');
+  } else if (spMode === 'bulk') {
+    bulkSkuSelection = chosen;
+    renderSkuPills('bulk');
   } else {
     fileSkus[spFileIdx] = chosen;
     renderSkuPills('file', spFileIdx);
