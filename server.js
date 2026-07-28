@@ -567,7 +567,7 @@ app.post('/api/identify-by-id/:id', requireAssistant, ah(async (req, res) => {
 
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
 {
-  "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
+  "doctype": "סוג המסמך — אחד מ: תעודות בדצים / תעודות רבנות / בקשות לרבנות / דוחות בדצים ואישורי תויות / תויות / מכתבים אחרים",
   "name": "שם קצר ומתאר של המסמך בעברית",
   "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
   "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה) בפורמט YYYY-MM-DD. אם לא מופיע — null",
@@ -630,7 +630,7 @@ app.post('/api/identify', requireAssistant, upload.single('file'), ah(async (req
 
 קרא את המסמך המצורף בקפידה וענה בדיוק בפורמט JSON הבא בלבד:
 {
-  "doctype": "סוג המסמך — אחד מ: תעודות כשרות / אישורי רבנות / דוחות יצור / בקשות / אחר",
+  "doctype": "סוג המסמך — אחד מ: תעודות בדצים / תעודות רבנות / בקשות לרבנות / דוחות בדצים ואישורי תויות / תויות / מכתבים אחרים",
   "name": "שם קצר ומתאר של המסמך בעברית",
   "expiry_date": "תאריך תוקף (Valid Until / Expiry / תוקף עד / Valid through) בפורמט YYYY-MM-DD. חפש בכל חלקי המסמך. אם לא מופיע — null",
   "production_date": "תאריך יצור (Production Date / Date of Issue / תאריך הנפקה / Manufactured) בפורמט YYYY-MM-DD. אם לא מופיע — null",
