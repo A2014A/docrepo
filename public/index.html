@@ -1236,6 +1236,34 @@ initAuth();loadStats();loadTags();loadDocs();
   </div>
 </div>
 
+<!-- SEND TO CONTACT MODAL (email / whatsapp, contact chosen fresh each time) -->
+<div class="modal-bg" id="rawMatSendModal">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <div class="modal-title">שליחה לאיש קשר</div>
+      <button class="modal-close" onclick="closeRawMatSend()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div id="rawMatSendAlert"></div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button type="button" class="btn btn-accent" id="rmsChannelEmail" style="flex:1" onclick="rawMatSendChannel('email')">✉ מייל</button>
+      <button type="button" class="btn btn-outline" id="rmsChannelWhatsapp" style="flex:1" onclick="rawMatSendChannel('whatsapp')">💬 וואטסאפ</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label" id="rmsToLabel">כתובת מייל</label>
+      <input type="text" class="form-input" id="rmsTo" placeholder="example@mail.com"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">הודעה</label>
+      <textarea class="form-input" id="rmsMessage" rows="5" style="resize:vertical"></textarea>
+    </div>
+    <p id="rmsWhatsappNote" style="display:none;font-size:.78rem;color:var(--ink3);margin-bottom:8px">בוואטסאפ אי אפשר לצרף תמונה אוטומטית דרך קישור -- התמונה תרד למחשב/לטלפון שלך כדי שתוכל לצרף אותה ידנית בשיחה שתיפתח.</p>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeRawMatSend()">ביטול</button>
+      <button class="btn btn-accent" id="rmsSendBtn" onclick="submitRawMatSend()">שלח</button>
+    </div>
+  </div>
+</div>
+
 
 <script>
 /* ══════════ SKU MANAGER ══════════ */
@@ -1402,6 +1430,7 @@ function renderRawMaterials(){
       <input type="text" class="form-input" style="width:150px;font-size:.8rem" placeholder="רמת כשרות..." value="${r.kashrutLevel||''}" id="rmlevel_${r.linkId}"/>
       <button class="btn btn-outline" style="font-size:.78rem;padding:5px 10px" onclick="updateRawMatStatus(${r.linkId},null,document.getElementById('rmlevel_${r.linkId}').value)">שמור רמה</button>
       <button class="btn btn-outline" style="font-size:.78rem;padding:5px 10px" onclick="openRawMatSkuDocs('${r.skuId}')">📎 כל המסמכים למקט</button>
+      <button class="btn btn-accent" style="font-size:.78rem;padding:5px 10px" onclick="openRawMatSend(${r.linkId})">📤 שלח</button>
     </div>`).join('');
   document.getElementById('rawMatCount').textContent=`סה"כ: ${rawMatData.length} חומרי גלם`;
 }
@@ -1476,6 +1505,61 @@ async function submitRawMaterial(){
     document.getElementById('rawMatAddAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;
   }finally{
     btn.disabled=false;btn.textContent='שלח לאישור';
+  }
+}
+
+/* ── שליחה לאיש קשר (מייל / וואטסאפ) -- איש הקשר נבחר בכל שליחה מחדש, לא מוגדר מראש ── */
+let rmsCurrentLinkId=null, rmsChannel='email';
+
+function openRawMatSend(linkId){
+  const r=rawMatData.find(x=>x.linkId===linkId);
+  if(!r)return;
+  rmsCurrentLinkId=linkId;
+  document.getElementById('rmsTo').value='';
+  document.getElementById('rmsMessage').value=`שלום,\n\nמצורפת תווית עבור מק"ט ${r.skuId} - ${r.skuName}.\n${r.kashrutLevel?'רמת כשרות: '+r.kashrutLevel+'\n':''}\nבברכה,\nאחים כהן`;
+  document.getElementById('rawMatSendAlert').innerHTML='';
+  rawMatSendChannel('email');
+  document.getElementById('rawMatSendModal').classList.add('open');
+}
+function closeRawMatSend(){
+  document.getElementById('rawMatSendModal').classList.remove('open');
+  rmsCurrentLinkId=null;
+}
+
+function rawMatSendChannel(channel){
+  rmsChannel=channel;
+  document.getElementById('rmsChannelEmail').className='btn '+(channel==='email'?'btn-accent':'btn-outline');
+  document.getElementById('rmsChannelWhatsapp').className='btn '+(channel==='whatsapp'?'btn-accent':'btn-outline');
+  document.getElementById('rmsToLabel').textContent=channel==='email'?'כתובת מייל':'מספר טלפון';
+  document.getElementById('rmsTo').placeholder=channel==='email'?'example@mail.com':'050-1234567';
+  document.getElementById('rmsWhatsappNote').style.display=channel==='whatsapp'?'block':'none';
+}
+
+async function submitRawMatSend(){
+  const to=document.getElementById('rmsTo').value.trim();
+  const message=document.getElementById('rmsMessage').value;
+  const r=rawMatData.find(x=>x.linkId===rmsCurrentLinkId);
+  if(!r)return;
+  if(!to){ document.getElementById('rawMatSendAlert').innerHTML='<div class="alert alert-error">נא להזין איש קשר</div>'; return; }
+  const btn=document.getElementById('rmsSendBtn');
+  btn.disabled=true;btn.textContent='שולח...';
+  try{
+    if(rmsChannel==='email'){
+      await apiFetch('/api/sku-links/'+rmsCurrentLinkId+'/send-email',{method:'POST',body:JSON.stringify({to,message})});
+      showToast('המייל נשלח בהצלחה');
+      closeRawMatSend();
+    }else{
+      // וואטסאפ: אין דרך לצרף קובץ אוטומטית מקישור wa.me -- מורידים את
+      // התמונה כדי שתהיה זמינה מיד, ופותחים את הצ'אט עם הטקסט מוכן.
+      await doDownload(r.docId,r.docName,r.docExt);
+      const digits=to.replace(/\D/g,'').replace(/^0/,'972');
+      window.open(`https://wa.me/${digits}?text=${encodeURIComponent(message)}`,'_blank');
+      closeRawMatSend();
+    }
+  }catch(e){
+    document.getElementById('rawMatSendAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;
+  }finally{
+    btn.disabled=false;btn.textContent='שלח';
   }
 }
 

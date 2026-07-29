@@ -19,6 +19,7 @@
     "jsonwebtoken": "^9.0.3",
     "lowdb": "^1.0.0",
     "multer": "^1.4.5-lts.1",
+    "nodemailer": "^9.0.3",
     "prisma": "^6.19.3",
     "sql.js": "^1.14.1",
     "xlsx": "^0.18.5"

@@ -6,12 +6,21 @@ const multer   = require('multer');
 const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
+const nodemailer = require('nodemailer');
 const { uploadBuffer, getObjectStream } = require('./lib/r2');
 
 const prisma = new PrismaClient();
 
 const PORT       = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'docrepo_secret_change_in_prod';
+
+function getMailer() {
+  if (!process.env.EMAIL_FROM || !process.env.EMAIL_APP_PASSWORD) return null;
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: process.env.EMAIL_FROM, pass: process.env.EMAIL_APP_PASSWORD },
+  });
+}
 
 /* ── generic settings (was top-level db fields: view_code/assistant_code/viewer_code) ── */
 const SETTINGS_DEFAULTS = { assistant_code: '5678', viewer_code: '0000', view_code: '1234' };
@@ -572,6 +581,29 @@ app.patch('/api/sku-links/:id', requireAssistant, ah(async (req, res) => {
     where: { id }, data: updates, include: { sku: true, document: true },
   });
   res.json(rawMaterialOut(updated));
+}));
+
+/* ── send a raw-material label by email, recipient chosen per-send (no fixed contact list) ── */
+app.post('/api/sku-links/:id/send-email', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { to, message } = req.body;
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: 'כתובת מייל לא תקינה' });
+  const mailer = getMailer();
+  if (!mailer) return res.status(400).json({ error: 'שליחת מייל לא הוגדרה בשרת (חסר EMAIL_APP_PASSWORD)' });
+  const link = await prisma.skuLink.findUnique({ where: { id }, include: { sku: true, document: true } });
+  if (!link || !link.sku || !link.document) return res.status(404).json({ error: 'רשומה לא נמצאה' });
+  const { stream, contentType } = await getObjectStream(link.document.fileUrl);
+  const ext = link.document.docExt ? '.' + link.document.docExt : '';
+  const filename = (link.document.title || 'תווית') + ext;
+  const defaultBody = `שלום,\n\nמצורפת תווית עבור מק"ט ${link.sku.code} - ${link.sku.name}.\n${link.kashrutLevel ? 'רמת כשרות: ' + link.kashrutLevel + '\n' : ''}\nבברכה,\nאחים כהן`;
+  await mailer.sendMail({
+    from: process.env.EMAIL_FROM,
+    to,
+    subject: `אישור כשרות - מק"ט ${link.sku.code} - ${link.sku.name}`,
+    text: message || defaultBody,
+    attachments: [{ filename, content: stream, contentType }],
+  });
+  res.json({ ok: true });
 }));
 
 /* ── ROLE CODES ── */
