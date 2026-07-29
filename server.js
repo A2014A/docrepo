@@ -332,6 +332,19 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), ah(async (req, 
   }
 }));
 
+/* documents already linked to one SKU -- powers the "pick which document to
+ * send" checklist in the raw-material send flow */
+app.get('/api/skus/:id/docs', requireAssistant, ah(async (req, res) => {
+  const sku = await prisma.sku.findUnique({ where: { code: req.params.id } });
+  if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
+  const links = await prisma.skuLink.findMany({
+    where: { skuId: sku.id, docType: 'DOCUMENT' }, include: { document: true }, orderBy: { createdAt: 'desc' },
+  });
+  res.json(links.filter(l => l.document).map(l => ({
+    id: l.document.id, name: l.document.title, ext: l.document.docExt || '', doctype: l.document.docType || '',
+  })));
+}));
+
 app.get('/api/skus/report', requireAuth, ah(async (req, res) => {
   // one query for all SKUs' links instead of one query per SKU (was
   // exhausting the connection pool at real data volume -- see docOut/
@@ -583,8 +596,12 @@ app.patch('/api/sku-links/:id', requireAssistant, ah(async (req, res) => {
   res.json(rawMaterialOut(updated));
 }));
 
-/* ── send a raw-material label by email, recipient chosen per-send (no fixed contact list) ── */
-app.post('/api/sku-links/:id/send-email', requireAssistant, ah(async (req, res) => {
+/* ── send a raw-material label by email, recipient chosen per-send (no fixed
+ * contact list). Attachments can be a mix of: (a) other documents already
+ * linked to the same SKU (picked by id, e.g. an existing kashrut cert), and
+ * (b) files uploaded ad-hoc from outside the system for this one send --
+ * those are attached directly from memory and never saved to R2/the DB. ── */
+app.post('/api/sku-links/:id/send-email', requireAssistant, upload.array('files', 10), ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const { to, message } = req.body;
   if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: 'כתובת מייל לא תקינה' });
@@ -592,16 +609,30 @@ app.post('/api/sku-links/:id/send-email', requireAssistant, ah(async (req, res) 
   if (!mailer) return res.status(400).json({ error: 'שליחת מייל לא הוגדרה בשרת (חסר EMAIL_APP_PASSWORD)' });
   const link = await prisma.skuLink.findUnique({ where: { id }, include: { sku: true, document: true } });
   if (!link || !link.sku || !link.document) return res.status(404).json({ error: 'רשומה לא נמצאה' });
-  const { stream, contentType } = await getObjectStream(link.document.fileUrl);
-  const ext = link.document.docExt ? '.' + link.document.docExt : '';
-  const filename = (link.document.title || 'תווית') + ext;
-  const defaultBody = `שלום,\n\nמצורפת תווית עבור מק"ט ${link.sku.code} - ${link.sku.name}.\n${link.kashrutLevel ? 'רמת כשרות: ' + link.kashrutLevel + '\n' : ''}\nבברכה,\nאחים כהן`;
+
+  const docIds = req.body.docIds ? JSON.parse(req.body.docIds).map(Number) : [];
+  const extraFiles = req.files || [];
+  if (!docIds.length && !extraFiles.length) return res.status(400).json({ error: 'נא לבחור לפחות מסמך אחד לצירוף' });
+
+  const docsToAttach = docIds.length
+    ? await prisma.document.findMany({ where: { id: { in: docIds } } })
+    : [];
+  const attachments = await Promise.all(docsToAttach.map(async (d) => {
+    const { stream, contentType } = await getObjectStream(d.fileUrl);
+    const ext = d.docExt ? '.' + d.docExt : '';
+    return { filename: (d.title || 'מסמך') + ext, content: stream, contentType };
+  }));
+  for (const f of extraFiles) {
+    attachments.push({ filename: f.originalname, content: f.buffer, contentType: f.mimetype });
+  }
+
+  const defaultBody = `שלום,\n\nמצורפים מסמכים עבור מק"ט ${link.sku.code} - ${link.sku.name}.\n${link.kashrutLevel ? 'רמת כשרות: ' + link.kashrutLevel + '\n' : ''}\nבברכה,\nאחים כהן`;
   await mailer.sendMail({
     from: process.env.EMAIL_FROM,
     to,
     subject: `אישור כשרות - מק"ט ${link.sku.code} - ${link.sku.name}`,
     text: message || defaultBody,
-    attachments: [{ filename, content: stream, contentType }],
+    attachments,
   });
   res.json({ ok: true });
 }));

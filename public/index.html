@@ -1239,7 +1239,7 @@ initAuth();loadStats();loadTags();loadDocs();
 
 <!-- SEND TO CONTACT MODAL (email / whatsapp, contact chosen fresh each time) -->
 <div class="modal-bg" id="rawMatSendModal">
-  <div class="modal" style="max-width:440px">
+  <div class="modal" style="max-width:480px">
     <div class="modal-header">
       <div class="modal-title">שליחה לאיש קשר</div>
       <button class="modal-close" onclick="closeRawMatSend()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
@@ -1263,10 +1263,16 @@ initAuth();loadStats();loadTags();loadDocs();
       </div>
     </div>
     <div class="form-group">
+      <label class="form-label">מסמכים לצירוף</label>
+      <div id="rmsSkuDocsList" style="max-height:150px;overflow-y:auto;border:1px solid var(--border2);border-radius:8px;padding:6px"></div>
+      <button type="button" class="btn btn-outline" style="width:100%;margin-top:6px;font-size:.8rem" onclick="document.getElementById('rmsExtraFileInput').click()">📎 צרף קובץ נוסף מהמחשב</button>
+      <input type="file" id="rmsExtraFileInput" multiple style="display:none" onchange="rmsAddExtraFiles(this)"/>
+      <div id="rmsExtraFilesList" style="margin-top:6px;display:flex;flex-direction:column;gap:4px"></div>
+    </div>
+    <div class="form-group">
       <label class="form-label">הודעה</label>
       <textarea class="form-input" id="rmsMessage" rows="5" style="resize:vertical"></textarea>
     </div>
-    <p id="rmsWhatsappNote" style="display:none;font-size:.78rem;color:var(--ink3);margin-bottom:8px">בוואטסאפ אי אפשר לצרף תמונה אוטומטית דרך קישור -- התמונה תרד למחשב/לטלפון שלך כדי שתוכל לצרף אותה ידנית בשיחה שתיפתח.</p>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeRawMatSend()">ביטול</button>
       <button class="btn btn-accent" id="rmsSendBtn" onclick="submitRawMatSend()">שלח</button>
@@ -1548,23 +1554,66 @@ async function submitRawMaterial(){
 }
 
 /* ── שליחה לאיש קשר (מייל / וואטסאפ) -- איש הקשר נבחר בכל שליחה מחדש, לא מוגדר מראש ── */
-let rmsCurrentLinkId=null, rmsChannel='email';
+let rmsCurrentLinkId=null, rmsChannel='email', rmsSkuDocs=[], rmsSelectedDocIds=new Set(), rmsExtraFiles=[];
 
-function openRawMatSend(linkId){
+async function openRawMatSend(linkId){
   const r=rawMatData.find(x=>x.linkId===linkId);
   if(!r)return;
   rmsCurrentLinkId=linkId;
   document.getElementById('rmsTo').value='';
   document.getElementById('rmsContactSelect').value='';
-  document.getElementById('rmsMessage').value=`שלום,\n\nמצורפת תווית עבור מק"ט ${r.skuId} - ${r.skuName}.\n${r.kashrutLevel?'רמת כשרות: '+r.kashrutLevel+'\n':''}\nבברכה,\nאחים כהן`;
+  document.getElementById('rmsMessage').value=`שלום,\n\nמצורפים מסמכים עבור מק"ט ${r.skuId} - ${r.skuName}.\n${r.kashrutLevel?'רמת כשרות: '+r.kashrutLevel+'\n':''}\nבברכה,\nאחים כהן`;
   document.getElementById('rawMatSendAlert').innerHTML='';
+  rmsExtraFiles=[];
+  renderRmsExtraFilesList();
   rawMatSendChannel('email');
   loadRmsContacts();
   document.getElementById('rawMatSendModal').classList.add('open');
+
+  // מסמכים אחרים שכבר מקושרים לאותו מק"ט -- ניתן לבחור גם אותם לצירוף,
+  // לא רק את המסמך שממנו נלחץ "שלח". המסמך הנוכחי מסומן מראש.
+  document.getElementById('rmsSkuDocsList').innerHTML='<div style="text-align:center;padding:8px;color:var(--ink3);font-size:.8rem">טוען...</div>';
+  try{
+    rmsSkuDocs=await apiFetch('/api/skus/'+r.skuId+'/docs');
+  }catch(e){
+    rmsSkuDocs=[{id:r.docId,name:r.docName,ext:r.docExt,doctype:'תויות'}];
+  }
+  rmsSelectedDocIds=new Set([r.docId]);
+  renderRmsSkuDocsList();
 }
 function closeRawMatSend(){
   document.getElementById('rawMatSendModal').classList.remove('open');
   rmsCurrentLinkId=null;
+}
+
+function renderRmsSkuDocsList(){
+  const el=document.getElementById('rmsSkuDocsList');
+  if(!rmsSkuDocs.length){ el.innerHTML='<div style="text-align:center;padding:8px;color:var(--ink3);font-size:.8rem">אין מסמכים נוספים למקט זה</div>'; return; }
+  el.innerHTML=rmsSkuDocs.map(d=>`
+    <label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;font-size:.82rem">
+      <input type="checkbox" ${rmsSelectedDocIds.has(d.id)?'checked':''} onchange="rmsToggleDoc(${d.id},this.checked)"/>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${jsAttr(d.name)}</span>
+      ${d.doctype?`<span style="font-size:.7rem;color:var(--ink3)">${d.doctype}</span>`:''}
+    </label>`).join('');
+}
+function rmsToggleDoc(id,checked){
+  if(checked) rmsSelectedDocIds.add(id); else rmsSelectedDocIds.delete(id);
+}
+function rmsAddExtraFiles(input){
+  for(const file of input.files) rmsExtraFiles.push(file);
+  input.value='';
+  renderRmsExtraFilesList();
+}
+function rmsRemoveExtraFile(i){
+  rmsExtraFiles.splice(i,1);
+  renderRmsExtraFilesList();
+}
+function renderRmsExtraFilesList(){
+  document.getElementById('rmsExtraFilesList').innerHTML=rmsExtraFiles.map((f,i)=>`
+    <div style="display:flex;align-items:center;gap:6px;font-size:.8rem;background:var(--bg2);border-radius:6px;padding:4px 8px">
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ${jsAttr(f.name)}</span>
+      <span onclick="rmsRemoveExtraFile(${i})" style="cursor:pointer">✕</span>
+    </div>`).join('');
 }
 
 function rawMatSendChannel(channel){
@@ -1573,7 +1622,6 @@ function rawMatSendChannel(channel){
   document.getElementById('rmsChannelWhatsapp').className='btn '+(channel==='whatsapp'?'btn-accent':'btn-outline');
   document.getElementById('rmsToLabel').textContent=channel==='email'?'כתובת מייל':'מספר טלפון';
   document.getElementById('rmsTo').placeholder=channel==='email'?'example@mail.com':'050-1234567';
-  document.getElementById('rmsWhatsappNote').style.display=channel==='whatsapp'?'block':'none';
   renderRmsContactOptions();
 }
 
@@ -1612,39 +1660,49 @@ async function rmsSaveContact(){
 async function submitRawMatSend(){
   const to=document.getElementById('rmsTo').value.trim();
   const message=document.getElementById('rmsMessage').value;
-  const r=rawMatData.find(x=>x.linkId===rmsCurrentLinkId);
-  if(!r)return;
   if(!to){ document.getElementById('rawMatSendAlert').innerHTML='<div class="alert alert-error">נא להזין איש קשר</div>'; return; }
+  if(!rmsSelectedDocIds.size && !rmsExtraFiles.length){ document.getElementById('rawMatSendAlert').innerHTML='<div class="alert alert-error">נא לבחור לפחות מסמך אחד לצירוף</div>'; return; }
   const btn=document.getElementById('rmsSendBtn');
   btn.disabled=true;btn.textContent='שולח...';
   try{
     if(rmsChannel==='email'){
-      await apiFetch('/api/sku-links/'+rmsCurrentLinkId+'/send-email',{method:'POST',body:JSON.stringify({to,message})});
+      const fd=new FormData();
+      fd.append('to',to);
+      fd.append('message',message);
+      fd.append('docIds',JSON.stringify([...rmsSelectedDocIds]));
+      rmsExtraFiles.forEach(f=>fd.append('files',f));
+      const res=await fetch(API+'/api/sku-links/'+rmsCurrentLinkId+'/send-email',{method:'POST',headers:authHeaders(),body:fd});
+      if(!res.ok){ const j=await res.json().catch(()=>({error:'שגיאה בשליחה'})); throw new Error(j.error||'שגיאה בשליחה'); }
       showToast('המייל נשלח בהצלחה');
       closeRawMatSend();
     }else{
       // וואטסאפ: קישור wa.me פותח צ'אט עם הטקסט מוכן, אבל לא יכול לצרף
-      // קובץ (מגבלת וואטסאפ עצמה) -- לכן מעדיפים את ה-Web Share API, שמצרף
-      // את התמונה בפועל דרך תפריט השיתוף של המכשיר (נתמך בעיקר בנייד;
+      // קבצים (מגבלת וואטסאפ עצמה) -- לכן מעדיפים את ה-Web Share API, שמצרף
+      // את הקבצים בפועל דרך תפריט השיתוף של המכשיר (נתמך בעיקר בנייד;
       // אין דרך לבחור איש קשר ספציפי מראש דרכו, בוחרים בתוך וואטסאפ).
-      // בדסקטופ/דפדפנים שלא תומכים -- fallback להורדה + קישור wa.me כמו קודם.
-      const fileRes=await fetch(`/api/docs/${r.docId}/download`,{headers:authHeaders()});
-      if(!fileRes.ok) throw new Error('שגיאה בטעינת התמונה');
-      const blob=await fileRes.blob();
-      const filename=r.docName+(r.docExt?'.'+r.docExt:'');
-      const file=new File([blob],filename,{type:blob.type||'image/png'});
-      if(navigator.canShare && navigator.canShare({files:[file]})){
+      // בדסקטופ/דפדפנים שלא תומכים -- fallback להורדת כל הקבצים + קישור wa.me.
+      const selectedDocs=rmsSkuDocs.filter(d=>rmsSelectedDocIds.has(d.id));
+      const fetchedFiles=await Promise.all(selectedDocs.map(async d=>{
+        const res=await fetch(`/api/docs/${d.id}/download`,{headers:authHeaders()});
+        if(!res.ok) throw new Error('שגיאה בטעינת '+d.name);
+        const blob=await res.blob();
+        return new File([blob],d.name+(d.ext?'.'+d.ext:''),{type:blob.type||'application/octet-stream'});
+      }));
+      const allFiles=[...fetchedFiles,...rmsExtraFiles];
+      if(navigator.canShare && navigator.canShare({files:allFiles})){
         try{
-          await navigator.share({files:[file],text:message,title:filename});
+          await navigator.share({files:allFiles,text:message});
         }catch(shareErr){
           if(shareErr.name!=='AbortError') throw shareErr; // AbortError = the user just closed the share sheet
         }
       }else{
-        const blobUrl=URL.createObjectURL(blob);
-        const a=document.createElement('a');
-        a.href=blobUrl;a.download=filename;
-        document.body.appendChild(a);a.click();document.body.removeChild(a);
-        setTimeout(()=>URL.revokeObjectURL(blobUrl),30000);
+        allFiles.forEach(file=>{
+          const blobUrl=URL.createObjectURL(file);
+          const a=document.createElement('a');
+          a.href=blobUrl;a.download=file.name;
+          document.body.appendChild(a);a.click();document.body.removeChild(a);
+          setTimeout(()=>URL.revokeObjectURL(blobUrl),30000);
+        });
         const digits=to.replace(/\D/g,'').replace(/^0/,'972');
         window.open(`https://wa.me/${digits}?text=${encodeURIComponent(message)}`,'_blank');
       }
