@@ -1025,9 +1025,15 @@ initAuth();loadStats();loadTags();loadDocs();
         </div>
       </div>
       <div id="skuListAlert"></div>
+      <div id="skuBulkBar" style="display:none;align-items:center;gap:10px;background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;margin-bottom:10px">
+        <span id="skuBulkCount" style="font-size:.85rem;font-weight:600"></span>
+        <button class="btn btn-accent" style="font-size:.8rem;padding:5px 12px" onclick="openSkuBulkEdit()">✏ עריכה מרובה</button>
+        <button class="btn btn-outline" style="font-size:.8rem;padding:5px 12px" onclick="clearSkuSelection()">בטל בחירה</button>
+      </div>
       <div style="max-height:400px;overflow-y:auto">
         <table style="width:100%;border-collapse:collapse;font-size:.82rem">
           <thead><tr style="background:var(--bg2);position:sticky;top:0;z-index:1">
+            <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2);width:28px"><input type="checkbox" id="skuSelectAll" onchange="toggleSelectAllSkus(this)"/></th>
             <th style="padding:7px 6px;text-align:right;border-bottom:1px solid var(--border2);white-space:nowrap">מקט</th>
             <th style="padding:7px 6px;text-align:right;border-bottom:1px solid var(--border2)">שם מוצר</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">טיפוס</th>
@@ -1160,17 +1166,128 @@ initAuth();loadStats();loadTags();loadDocs();
   </div>
 </div>
 
+<!-- SKU BULK EDIT MODAL -->
+<div class="modal-bg" id="skuBulkEditModal">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <div class="modal-title" id="skuBulkEditTitle">עריכה מרובה</div>
+      <button class="modal-close" onclick="closeSkuBulkEdit()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <p style="font-size:.82rem;color:var(--ink2);margin-bottom:10px">סמן ✓ ליד כל שדה שברצונך לעדכן עבור כל המקטים שנבחרו. שדות שלא סומנו יישארו ללא שינוי.</p>
+    <div id="skuBulkEditAlert"></div>
+    <div id="skuBulkEditFields" style="display:flex;flex-direction:column;gap:10px"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeSkuBulkEdit()">ביטול</button>
+      <button class="btn btn-accent" onclick="applySkuBulkEdit()">החל על הנבחרים</button>
+    </div>
+  </div>
+</div>
+
 
 <script>
 /* ══════════ SKU MANAGER ══════════ */
 let skuManagerData=[], reportData=[], reportFilter='all', editingSkuId=null;
+let skuBulkSelected=new Set();
+
+function toggleSkuSelect(id,checked){
+  if(checked) skuBulkSelected.add(id); else skuBulkSelected.delete(id);
+  updateSkuBulkBar();
+  const selAll=document.getElementById('skuSelectAll');
+  if(selAll) selAll.checked=skuManagerData.length>0 && skuManagerData.every(s=>skuBulkSelected.has(s.id));
+}
+function toggleSelectAllSkus(cb){
+  skuManagerData.forEach(s=>{ if(cb.checked) skuBulkSelected.add(s.id); else skuBulkSelected.delete(s.id); });
+  document.querySelectorAll('.sku-select-cb').forEach(el=>el.checked=cb.checked);
+  updateSkuBulkBar();
+}
+function clearSkuSelection(){
+  skuBulkSelected.clear();
+  document.querySelectorAll('.sku-select-cb').forEach(el=>el.checked=false);
+  const selAll=document.getElementById('skuSelectAll');
+  if(selAll) selAll.checked=false;
+  updateSkuBulkBar();
+}
+function updateSkuBulkBar(){
+  const bar=document.getElementById('skuBulkBar');
+  if(!bar)return;
+  if(skuBulkSelected.size>0){
+    bar.style.display='flex';
+    document.getElementById('skuBulkCount').textContent=`${skuBulkSelected.size} מקטים נבחרו`;
+  } else {
+    bar.style.display='none';
+  }
+}
+
+/* ══ BULK EDIT ══ */
+// name is deliberately excluded -- setting the same product name across many
+// SKUs at once doesn't make sense the way a shared supplier/kashrut/cert-type
+// value does.
+const SKU_BULK_FIELDS=[
+  {key:'supplier',label:'ספק 1',type:'text'},
+  {key:'supplier2',label:'ספק 2',type:'text'},
+  {key:'tipus',label:'טיפוס',type:'select',options:[['','— ריק —'],['רכש','רכש'],['יצור','יצור']]},
+  {key:'source',label:'מקור',type:'select',options:[['','— ריק —'],['יבוא','יבוא'],['רכש מקומי','רכש מקומי']]},
+  {key:'responsible',label:'איש רכש',type:'text'},
+  {key:'kashrus',label:'כשרות',type:'text'},
+  {key:'pesach',label:'כשרות פסח',type:'text'},
+  {key:'certType',label:'סוג תעודה',type:'select',options:null}, // filled in dynamically from CERT_TYPE_OPTIONS
+  {key:'notes',label:'הערות',type:'text'},
+];
+
+function openSkuBulkEdit(){
+  if(skuBulkSelected.size===0)return;
+  document.getElementById('skuBulkEditTitle').textContent=`עריכה מרובה — ${skuBulkSelected.size} מקטים`;
+  document.getElementById('skuBulkEditAlert').innerHTML='';
+  document.getElementById('skuBulkEditFields').innerHTML=SKU_BULK_FIELDS.map(f=>{
+    const opts=f.key==='certType' ? [['','— ריק —'],...CERT_TYPE_OPTIONS.map(o=>[o.value,o.label])] : f.options;
+    const valueField=f.type==='select'
+      ? `<select class="form-select" id="skubulk_val_${f.key}" disabled style="flex:1">${opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>`
+      : `<input type="text" class="form-input" id="skubulk_val_${f.key}" disabled style="flex:1"/>`;
+    return `<div style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="skubulk_chk_${f.key}" onchange="document.getElementById('skubulk_val_${f.key}').disabled=!this.checked"/>
+      <label style="width:80px;font-size:.82rem;flex-shrink:0">${f.label}</label>
+      ${valueField}
+    </div>`;
+  }).join('');
+  document.getElementById('skuBulkEditModal').classList.add('open');
+}
+
+function closeSkuBulkEdit(){document.getElementById('skuBulkEditModal').classList.remove('open');}
+
+async function applySkuBulkEdit(){
+  const body={};
+  SKU_BULK_FIELDS.forEach(f=>{
+    if(document.getElementById('skubulk_chk_'+f.key).checked){
+      const el=document.getElementById('skubulk_val_'+f.key);
+      body[f.key]=f.type==='text' ? el.value.trim() : el.value;
+    }
+  });
+  if(Object.keys(body).length===0){
+    document.getElementById('skuBulkEditAlert').innerHTML='<div class="alert alert-error">סמן לפחות שדה אחד לעדכון</div>';
+    return;
+  }
+  const ids=[...skuBulkSelected];
+  if(!confirm(`לעדכן ${Object.keys(body).length} שדות עבור ${ids.length} מקטים?`))return;
+  const btn=document.querySelector('#skuBulkEditModal .btn-accent');
+  btn.disabled=true;btn.textContent='מעדכן...';
+  let ok=0,fail=0;
+  for(const id of ids){
+    try{ await apiFetch('/api/skus/'+id,{method:'PATCH',body:JSON.stringify(body)}); ok++; }
+    catch(e){ fail++; }
+  }
+  btn.disabled=false;btn.textContent='החל על הנבחרים';
+  showToast(fail===0?`${ok} מקטים עודכנו בהצלחה`:`${ok} עודכנו, ${fail} נכשלו`);
+  closeSkuBulkEdit();
+  clearSkuSelection();
+  loadSkuList();
+}
 
 function openSkuManager(){
   document.getElementById('skuModal').classList.add('open');
   document.getElementById('skuAddCertType').innerHTML='<option value="">— בחר —</option>'+CERT_TYPE_OPTIONS.map(o=>`<option value="${o.value}">${o.label}</option>`).join('');
   skuTab('list');
 }
-function closeSkuManager(){document.getElementById('skuModal').classList.remove('open');}
+function closeSkuManager(){document.getElementById('skuModal').classList.remove('open');clearSkuSelection();}
 function closeSkuEdit(){document.getElementById('skuEditModal').classList.remove('open');editingSkuId=null;}
 
 function skuTab(t){
@@ -1221,6 +1338,7 @@ async function loadSkuList(){
   skuManagerData=skus;
   document.getElementById('skuTableBody').innerHTML=skus.map(s=>`
     <tr style="border-bottom:1px solid var(--border1)" id="skurow_${s.id}">
+      <td style="padding:7px 8px;text-align:center"><input type="checkbox" class="sku-select-cb" ${skuBulkSelected.has(s.id)?'checked':''} onchange="toggleSkuSelect('${s.id}',this.checked)"/></td>
       <td style="padding:7px 8px;font-weight:600;color:var(--accent2)">${s.id}</td>
       <td style="padding:7px 8px" id="skuname_${s.id}">${s.name}</td>
       <td style="padding:7px 8px;text-align:center">${s.tipus?`<span style="font-size:.75rem;padding:2px 7px;border-radius:99px;background:#EEF2FF;color:#3730a3">${s.tipus}</span>`:''}</td>
@@ -1238,6 +1356,9 @@ async function loadSkuList(){
       </td>
     </tr>`).join('');
   document.getElementById('skuListCount').textContent=`סה"כ: ${skus.length} מקטים`;
+  updateSkuBulkBar();
+  const selAll=document.getElementById('skuSelectAll');
+  if(selAll) selAll.checked=skus.length>0 && skus.every(s=>skuBulkSelected.has(s.id));
   // עדכן checkboxes איש רכש
   const allResps=[...new Set(skuManagerData.map(s=>s.responsible||'').filter(Boolean))].sort();
   const box=document.getElementById('respCheckboxes');
