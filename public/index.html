@@ -505,6 +505,9 @@ function renderCard(d,i){
       <button class="dl-btn" onclick="guardedDownload(${d.id},'${jsAttr(d.name)}','${d.ext}')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
       </button>
+      <button class="icon-btn" onclick="guardedShare(${d.id},'${jsAttr(d.name)}','${d.ext}')" title="שתף">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      </button>
       ${isAdm?`
       <button class="icon-btn" onclick="openEdit(${d.id})" title="עריכה">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -1401,6 +1404,9 @@ function renderSkuDocs() {
               <button onclick="guardedDownload(${d.id},'${jsAttr(d.name)}','${d.ext}')" style="font-size:.78rem;padding:5px 12px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--ink2);cursor:pointer;display:inline-flex;align-items:center;gap:4px">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
               </button>
+              <button onclick="guardedShare(${d.id},'${jsAttr(d.name)}','${d.ext}')" title="שתף" style="font-size:.78rem;padding:5px 8px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--ink2);cursor:pointer;display:inline-flex;align-items:center">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+              </button>
             </td>
           </tr>`).join('')}
       </tbody>
@@ -1429,6 +1435,10 @@ function expiryBadge(dateStr){
 
 let viewerBlobUrl = null;
 
+function isMobileDevice() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Mac/i.test(navigator.userAgent));
+}
+
 async function openViewer(id, ext, name) {
   // Direct <iframe>/<img> src="/api/docs/:id/download" never sends the
   // Authorization header (plain browser navigation can't attach custom
@@ -1439,8 +1449,22 @@ async function openViewer(id, ext, name) {
   const dlBtn = document.getElementById('viewerDownload');
   dlBtn.href = 'javascript:void(0)';
   dlBtn.onclick = () => guardedDownload(id, name, ext);
+  const shareBtn = document.getElementById('viewerShare');
+  if (shareBtn) shareBtn.onclick = () => guardedShare(id, name, ext);
   const body = document.getElementById('viewerBody');
   const e = (ext||'').toLowerCase();
+
+  // Mobile browsers (especially iOS Safari and installed PWAs) routinely
+  // fail to render a PDF blob: URL inside an <iframe> -- it shows blank or
+  // just triggers a download instead of viewing. They DO render blob: PDFs
+  // fine in a full tab, so on mobile skip the iframe and hand the file to
+  // a new tab instead. window.open() must be called synchronously inside
+  // the click handler (before the await below) or mobile browsers block it
+  // as a popup since it's no longer tied to the user gesture -- open a
+  // blank tab first, then point it at the blob once it's ready.
+  const mobilePdf = e === 'pdf' && isMobileDevice();
+  const mobileTab = mobilePdf ? window.open('', '_blank') : null;
+
   document.getElementById('viewerModal').classList.add('open');
   body.innerHTML = `<div class="loading"><div class="spinner"></div>טוען...</div>`;
 
@@ -1452,12 +1476,18 @@ async function openViewer(id, ext, name) {
       if (!res.ok) { const j = await res.json().catch(()=>({error:'שגיאה'})); throw new Error(j.error||'שגיאה'); }
       const blob = await res.blob();
       viewerBlobUrl = URL.createObjectURL(blob);
-      if (e === 'pdf') {
+      if (mobilePdf) {
+        closeViewer();
+        if (mobileTab) { mobileTab.location.href = viewerBlobUrl; }
+        else { window.open(viewerBlobUrl, '_blank'); } // popup was blocked -- fall back, may still be blocked
+        return;
+      } else if (e === 'pdf') {
         body.innerHTML = `<iframe src="${viewerBlobUrl}#toolbar=1&navpanes=0" style="width:100%;height:100%;border:none" type="application/pdf"></iframe>`;
       } else {
         body.innerHTML = `<img src="${viewerBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain;padding:1rem" alt="${name}"/>`;
       }
     } catch(err) {
+      if (mobileTab) mobileTab.close();
       body.innerHTML = `<div style="text-align:center;color:var(--ink3);padding:3rem"><p>שגיאה בטעינת הקובץ: ${err.message}</p></div>`;
     }
   } else if (['doc','docx','xls','xlsx','ppt','pptx'].includes(e)) {
@@ -1588,6 +1618,36 @@ function guardedDownload(id, name, ext) {
   openViewCodeModal();
 }
 
+function guardedShare(id, name, ext) {
+  if (canViewDownload()) { shareDocument(id, name, ext); return; }
+  pendingAction = { type: 'share', args: [id, name, ext] };
+  openViewCodeModal();
+}
+
+async function shareDocument(id, name, ext) {
+  const filename = name + (ext ? '.' + ext : '');
+  try {
+    const res = await fetch(`/api/docs/${id}/download`, { headers: authHeaders() });
+    if (!res.ok) { const j = await res.json().catch(()=>({error:'שגיאה בשיתוף'})); throw new Error(j.error||'שגיאה בשיתוף'); }
+    const blob = await res.blob();
+    const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+    } else {
+      // Web Share API for files isn't supported here (mainly desktop
+      // browsers) -- fall back to a normal download instead of failing silently.
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+      showToast('שיתוף קבצים לא נתמך בדפדפן הזה — הקובץ הורד');
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') showToast(e.message); // AbortError = the user just closed the share sheet
+  }
+}
+
 async function doDownload(id, name, ext) {
   // same auth-header problem as openViewer() -- fetch it ourselves instead
   // of pointing an <a href> straight at the API.
@@ -1639,6 +1699,7 @@ async function submitViewCode() {
         pendingAction = null;
         if (type === 'view')     openViewer(...args);
         if (type === 'download') doDownload(...args);
+        if (type === 'share')    shareDocument(...args);
       }
     } else {
       document.getElementById('viewCodeAlert').innerHTML = '<div class="alert alert-error">קוד שגוי</div>';
@@ -2043,6 +2104,9 @@ async function aiIdentifyEdit() {
     <div class="modal-header" style="padding:1rem 1.25rem;border-bottom:1px solid var(--border);flex-shrink:0">
       <div class="modal-title" id="viewerTitle" style="font-size:1rem"></div>
       <div style="display:flex;gap:8px;align-items:center">
+        <button id="viewerShare" class="btn btn-outline" style="font-size:.8rem;padding:6px 14px" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>שתף
+        </button>
         <a id="viewerDownload" class="btn btn-outline" style="font-size:.8rem;padding:6px 14px" download>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>הורד
         </a>
