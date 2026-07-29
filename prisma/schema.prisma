@@ -17,6 +17,7 @@ enum Role {
 enum CertType {
   ANNUAL
   PER_PRODUCTION
+  ANNUAL_REGULAR_PER_PRODUCTION_PESACH // לימות השנה שנתי, לפסח לפי יצור
 }
 
 enum ApprovalStatus {

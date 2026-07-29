@@ -128,8 +128,10 @@ function skuOut(s) {
     id: s.code, name: s.name, supplier: s.supplier || '', supplier2: s.supplier2 || '',
     tipus: s.tipus || '', source: s.sourceFlag || '', responsible: s.responsible || '',
     kashrus: s.kashrutBodyRef || '', pesach: s.pesachStatusRef || '', notes: s.notes || '',
+    certType: s.certType || '',
   };
 }
+const VALID_CERT_TYPES = ['ANNUAL', 'PER_PRODUCTION', 'ANNUAL_REGULAR_PER_PRODUCTION_PESACH'];
 
 // Batch-fetch context for docOut() -- calling prisma.skuLink.findMany() once
 // per document (via Promise.all over a whole list) exhausted the connection
@@ -222,15 +224,17 @@ app.get('/api/skus', ah(async (req, res) => {
 }));
 
 app.post('/api/skus', requireAuth, ah(async (req, res) => {
-  const { id, name, supplier, tipus, source, responsible, kashrus, pesach, notes } = req.body;
+  const { id, name, supplier, supplier2, tipus, source, responsible, kashrus, pesach, notes, certType } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'חסרים מספר ושם' });
   if (await prisma.sku.findUnique({ where: { code: String(id) } }))
     return res.status(400).json({ error: 'מקט כבר קיים' });
+  if (certType && !VALID_CERT_TYPES.includes(certType)) return res.status(400).json({ error: 'סוג תעודה לא תקין' });
   const sku = await prisma.sku.create({
     data: {
-      code: String(id), name, supplier: supplier||'', tipus: tipus||'',
+      code: String(id), name, supplier: supplier||'', supplier2: supplier2||'', tipus: tipus||'',
       sourceFlag: source||'', responsible: responsible||'',
       kashrutBodyRef: kashrus||'', pesachStatusRef: pesach||'', notes: notes||'',
+      certType: certType || null,
       reviewedAt: new Date(),
     },
   });
@@ -240,16 +244,20 @@ app.post('/api/skus', requireAuth, ah(async (req, res) => {
 app.patch('/api/skus/:id', requireAuth, ah(async (req, res) => {
   const sku = await prisma.sku.findUnique({ where: { code: req.params.id } });
   if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
-  const { name, supplier, tipus, source, responsible, kashrus, pesach, notes } = req.body;
+  const { name, supplier, supplier2, tipus, source, responsible, kashrus, pesach, notes, certType } = req.body;
+  if (certType !== undefined && certType !== '' && !VALID_CERT_TYPES.includes(certType))
+    return res.status(400).json({ error: 'סוג תעודה לא תקין' });
   const updates = {};
   if (name        !== undefined) updates.name           = name;
   if (supplier    !== undefined) updates.supplier       = supplier;
+  if (supplier2   !== undefined) updates.supplier2      = supplier2;
   if (tipus       !== undefined) updates.tipus          = tipus;
   if (source      !== undefined) updates.sourceFlag     = source;
   if (responsible !== undefined) updates.responsible    = responsible;
   if (kashrus     !== undefined) updates.kashrutBodyRef = kashrus;
   if (pesach      !== undefined) updates.pesachStatusRef= pesach;
   if (notes       !== undefined) updates.notes          = notes;
+  if (certType    !== undefined) updates.certType       = certType || null;
   updates.reviewedAt = new Date();
   const updated = await prisma.sku.update({ where: { code: req.params.id }, data: updates });
   res.json(skuOut(updated));

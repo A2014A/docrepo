@@ -384,6 +384,12 @@ let editTags=[],chosenFiles=[],editingDocId=null,searchTimer=null;
 let fileTags=[];
 
 const DOCTYPE_OPTIONS=['תעודות בדצים','תעודות רבנות','בקשות לרבנות','דוחות בדצים ואישורי תויות','תויות','מכתבים אחרים'];
+const CERT_TYPE_OPTIONS=[
+  {value:'ANNUAL',label:'תעודה שנתית'},
+  {value:'PER_PRODUCTION',label:'תעודה לפי יצור'},
+  {value:'ANNUAL_REGULAR_PER_PRODUCTION_PESACH',label:'לימות השנה שנתי, לפסח לפי יצור'},
+];
+function certTypeLabel(v){return (CERT_TYPE_OPTIONS.find(o=>o.value===v)||{}).label||'';}
 // default visibility rule: only final certificates are visible to
 // non-admin roles (assistant/viewer); requests, reports, labels and other
 // letters default to admin-only. Suggested when a doctype is picked --
@@ -1032,6 +1038,7 @@ initAuth();loadStats();loadTags();loadDocs();
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">כשרות</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">פסח</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">הערות</th>
+            <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">סוג תעודה</th>
             <th style="padding:7px 6px;text-align:center;border-bottom:1px solid var(--border2)">פעולות</th>
           </tr></thead>
           <tbody id="skuTableBody"></tbody>
@@ -1065,7 +1072,11 @@ initAuth();loadStats();loadTags();loadDocs();
         <div class="form-group"><label class="form-label">איש רכש</label><input type="text" class="form-input" id="skuAddResp" placeholder="שם איש הרכש..."/></div>
         <div class="form-group"><label class="form-label">כשרות</label><input type="text" class="form-input" id="skuAddKashrus" placeholder="עדה חרדית / בית יוסף..."/></div>
         <div class="form-group"><label class="form-label">כשרות פסח</label><input type="text" class="form-input" id="skuAddPesach" placeholder="כשרות לפסח..."/></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">הערות</label><input type="text" class="form-input" id="skuAddNotes" placeholder="הערות..."/></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">סוג תעודה</label>
+          <select class="form-select" id="skuAddCertType">
+            <option value="">— בחר —</option>
+          </select>
+        </div>
         <div class="form-group" style="grid-column:1/-1"><label class="form-label">הערות</label><input type="text" class="form-input" id="skuAddNotes" placeholder="הערות חופשיות..."/></div>
       </div>
       <button class="btn btn-accent" style="margin-top:8px" onclick="addSkuManual()">הוסף מקט</button>
@@ -1135,6 +1146,11 @@ initAuth();loadStats();loadTags();loadDocs();
       <div class="form-group"><label class="form-label">איש רכש</label><input type="text" class="form-input" id="skuEditResp"/></div>
       <div class="form-group"><label class="form-label">כשרות</label><input type="text" class="form-input" id="skuEditKashrus"/></div>
       <div class="form-group"><label class="form-label">כשרות פסח</label><input type="text" class="form-input" id="skuEditPesach"/></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">סוג תעודה</label>
+        <select class="form-select" id="skuEditCertType">
+          <option value="">— בחר —</option>
+        </select>
+      </div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">הערות</label><input type="text" class="form-input" id="skuEditNotes"/></div>
     </div>
     <div class="modal-footer">
@@ -1149,7 +1165,11 @@ initAuth();loadStats();loadTags();loadDocs();
 /* ══════════ SKU MANAGER ══════════ */
 let skuManagerData=[], reportData=[], reportFilter='all', editingSkuId=null;
 
-function openSkuManager(){document.getElementById('skuModal').classList.add('open');skuTab('list');}
+function openSkuManager(){
+  document.getElementById('skuModal').classList.add('open');
+  document.getElementById('skuAddCertType').innerHTML='<option value="">— בחר —</option>'+CERT_TYPE_OPTIONS.map(o=>`<option value="${o.value}">${o.label}</option>`).join('');
+  skuTab('list');
+}
 function closeSkuManager(){document.getElementById('skuModal').classList.remove('open');}
 function closeSkuEdit(){document.getElementById('skuEditModal').classList.remove('open');editingSkuId=null;}
 
@@ -1211,8 +1231,9 @@ async function loadSkuList(){
       <td style="padding:7px 8px;text-align:center;color:var(--ink3);font-size:.8rem">${s.kashrus||''}</td>
       <td style="padding:7px 8px;text-align:center;color:var(--ink3);font-size:.8rem">${s.pesach||''}</td>
       <td style="padding:7px 8px;color:var(--ink3);font-size:.8rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.notes||''}">${s.notes||''}</td>
+      <td style="padding:7px 8px;text-align:center">${s.certType?`<span style="font-size:.72rem;padding:2px 7px;border-radius:99px;background:#f3e8ff;color:#6b21a8;white-space:nowrap">${certTypeLabel(s.certType)}</span>`:''}</td>
       <td style="padding:7px 8px;text-align:center;white-space:nowrap">
-        <button class="icon-btn" onclick="startEditSku('${s.id}')" title="עריכה">✏️</button>
+        <button class="icon-btn" onclick="openEditSku('${s.id}')" title="עריכה">✏️</button>
         <button class="icon-btn" onclick="deleteSku('${s.id}')" title="מחיקה" style="color:#dc2626">🗑</button>
       </td>
     </tr>`).join('');
@@ -1226,19 +1247,47 @@ async function loadSkuList(){
   }
 }
 
-function startEditSku(id){
+function openEditSku(id){
   const s=skuManagerData.find(x=>x.id===id);if(!s)return;
-  document.getElementById('skuname_'+id).innerHTML=`<input class="form-input" style="padding:3px 6px;font-size:.85rem" id="editname_${id}" value="${s.name}"/>`;
-  document.getElementById('skusup_'+id).innerHTML=`<input class="form-input" style="padding:3px 6px;font-size:.85rem" id="editsup_${id}" value="${s.supplier||''}"/>`;
-  document.getElementById('skurow_'+id).querySelector('.icon-btn').outerHTML=`<button class="btn btn-accent" style="font-size:.75rem;padding:3px 8px" onclick="saveEditSku('${id}')">שמור</button>`;
+  editingSkuId=id;
+  document.getElementById('skuEditTitle').textContent='עריכת מקט '+id;
+  document.getElementById('skuEditAlert').innerHTML='';
+  document.getElementById('skuEditName').value=s.name||'';
+  document.getElementById('skuEditSupplier').value=s.supplier||'';
+  document.getElementById('skuEditSupplier2').value=s.supplier2||'';
+  document.getElementById('skuEditTipus').value=s.tipus||'';
+  document.getElementById('skuEditSource').value=s.source||'';
+  document.getElementById('skuEditResp').value=s.responsible||'';
+  document.getElementById('skuEditKashrus').value=s.kashrus||'';
+  document.getElementById('skuEditPesach').value=s.pesach||'';
+  document.getElementById('skuEditNotes').value=s.notes||'';
+  document.getElementById('skuEditCertType').innerHTML='<option value="">— בחר —</option>'+CERT_TYPE_OPTIONS.map(o=>`<option value="${o.value}">${o.label}</option>`).join('');
+  document.getElementById('skuEditCertType').value=s.certType||'';
+  document.getElementById('skuEditModal').classList.add('open');
 }
 
-async function saveEditSku(id){
-  const name=document.getElementById('editname_'+id)?.value.trim();
-  const supplier=document.getElementById('editsup_'+id)?.value.trim();
-  if(!name)return;
-  await apiFetch('/api/skus/'+id,{method:'PATCH',body:JSON.stringify({name,supplier})});
-  showToast('המקט עודכן');loadSkuList();
+async function saveSkuEdit(){
+  const id=editingSkuId;if(!id)return;
+  const name=document.getElementById('skuEditName').value.trim();
+  if(!name){document.getElementById('skuEditAlert').innerHTML='<div class="alert alert-error">נא למלא שם מוצר</div>';return;}
+  const body={
+    name,
+    supplier:document.getElementById('skuEditSupplier').value.trim(),
+    supplier2:document.getElementById('skuEditSupplier2').value.trim(),
+    tipus:document.getElementById('skuEditTipus').value,
+    source:document.getElementById('skuEditSource').value,
+    responsible:document.getElementById('skuEditResp').value.trim(),
+    kashrus:document.getElementById('skuEditKashrus').value.trim(),
+    pesach:document.getElementById('skuEditPesach').value.trim(),
+    notes:document.getElementById('skuEditNotes').value.trim(),
+    certType:document.getElementById('skuEditCertType').value,
+  };
+  try{
+    await apiFetch('/api/skus/'+id,{method:'PATCH',body:JSON.stringify(body)});
+    showToast('המקט עודכן');
+    closeSkuEdit();
+    loadSkuList();
+  }catch(e){document.getElementById('skuEditAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
 }
 
 async function deleteSku(id){
@@ -1252,14 +1301,20 @@ async function addSkuManual(){
   const name=document.getElementById('skuAddName').value.trim();
   const supplier=document.getElementById('skuAddSupplier').value.trim();
   const supplier2=document.getElementById('skuAddSupplier2')?.value.trim()||'';
+  const tipus=document.getElementById('skuAddTipus')?.value||'';
+  const source=document.getElementById('skuAddSource')?.value||'';
   const responsible=document.getElementById('skuAddResp')?.value.trim()||'';
   const kashrus=document.getElementById('skuAddKashrus')?.value.trim()||'';
   const pesach=document.getElementById('skuAddPesach')?.value.trim()||'';
   const notes=document.getElementById('skuAddNotes')?.value.trim()||'';
+  const certType=document.getElementById('skuAddCertType')?.value||'';
   if(!id||!name){document.getElementById('skuAddAlert').innerHTML='<div class="alert alert-error">נא למלא מקט ושם</div>';return;}
   try{
-    await apiFetch('/api/skus',{method:'POST',body:JSON.stringify({id,name,supplier,supplier2,responsible,kashrus,pesach,notes})});
+    await apiFetch('/api/skus',{method:'POST',body:JSON.stringify({id,name,supplier,supplier2,tipus,source,responsible,kashrus,pesach,notes,certType})});
     ['skuAddId','skuAddName','skuAddSupplier','skuAddSupplier2','skuAddResp','skuAddKashrus','skuAddPesach','skuAddNotes'].forEach(x=>{const el=document.getElementById(x);if(el)el.value='';});
+    document.getElementById('skuAddTipus').value='';
+    document.getElementById('skuAddSource').value='';
+    document.getElementById('skuAddCertType').value='';
     document.getElementById('skuAddAlert').innerHTML='<div class="alert alert-success">המקט נוסף בהצלחה!</div>';
     setTimeout(()=>document.getElementById('skuAddAlert').innerHTML='',3000);
   }catch(e){document.getElementById('skuAddAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;}
