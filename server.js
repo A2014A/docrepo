@@ -606,6 +606,30 @@ app.post('/api/sku-links/:id/send-email', requireAssistant, ah(async (req, res) 
   res.json({ ok: true });
 }));
 
+/* ── CONTACTS (for the send-to-email/whatsapp flow) ──
+ * Not a fixed predefined list -- people save whichever contacts they
+ * actually deal with (kashrut-body reps etc.), then pick from those
+ * instead of retyping the same address/number every time. */
+app.get('/api/contacts', requireAssistant, ah(async (req, res) => {
+  const contacts = await prisma.contact.findMany({ orderBy: { name: 'asc' } });
+  res.json(contacts);
+}));
+
+app.post('/api/contacts', requireAssistant, ah(async (req, res) => {
+  const { name, email, phone } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'נא להזין שם' });
+  if (!email && !phone) return res.status(400).json({ error: 'נא להזין מייל או טלפון' });
+  const contact = await prisma.contact.create({
+    data: { name: name.trim(), email: email || null, phone: phone || null },
+  });
+  res.status(201).json(contact);
+}));
+
+app.delete('/api/contacts/:id', requireAssistant, ah(async (req, res) => {
+  await prisma.contact.delete({ where: { id: parseInt(req.params.id) } }).catch(() => {});
+  res.json({ ok: true });
+}));
+
 /* ── ROLE CODES ── */
 app.get('/api/role-code/check', ah(async (req, res) => {
   const { code } = req.query;

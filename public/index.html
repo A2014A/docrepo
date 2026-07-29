@@ -1249,8 +1249,17 @@ initAuth();loadStats();loadTags();loadDocs();
       <button type="button" class="btn btn-outline" id="rmsChannelWhatsapp" style="flex:1" onclick="rawMatSendChannel('whatsapp')">💬 וואטסאפ</button>
     </div>
     <div class="form-group">
+      <label class="form-label">איש קשר קיים</label>
+      <select class="form-select" id="rmsContactSelect" onchange="rmsPickContact(this.value)">
+        <option value="">— בחר מרשימה או הקלד למטה —</option>
+      </select>
+    </div>
+    <div class="form-group">
       <label class="form-label" id="rmsToLabel">כתובת מייל</label>
-      <input type="text" class="form-input" id="rmsTo" placeholder="example@mail.com"/>
+      <div style="display:flex;gap:6px">
+        <input type="text" class="form-input" id="rmsTo" placeholder="example@mail.com" style="flex:1"/>
+        <button type="button" class="btn btn-outline" style="white-space:nowrap;font-size:.8rem" onclick="rmsSaveContact()">💾 שמור כאיש קשר</button>
+      </div>
     </div>
     <div class="form-group">
       <label class="form-label">הודעה</label>
@@ -1516,9 +1525,11 @@ function openRawMatSend(linkId){
   if(!r)return;
   rmsCurrentLinkId=linkId;
   document.getElementById('rmsTo').value='';
+  document.getElementById('rmsContactSelect').value='';
   document.getElementById('rmsMessage').value=`שלום,\n\nמצורפת תווית עבור מק"ט ${r.skuId} - ${r.skuName}.\n${r.kashrutLevel?'רמת כשרות: '+r.kashrutLevel+'\n':''}\nבברכה,\nאחים כהן`;
   document.getElementById('rawMatSendAlert').innerHTML='';
   rawMatSendChannel('email');
+  loadRmsContacts();
   document.getElementById('rawMatSendModal').classList.add('open');
 }
 function closeRawMatSend(){
@@ -1533,6 +1544,39 @@ function rawMatSendChannel(channel){
   document.getElementById('rmsToLabel').textContent=channel==='email'?'כתובת מייל':'מספר טלפון';
   document.getElementById('rmsTo').placeholder=channel==='email'?'example@mail.com':'050-1234567';
   document.getElementById('rmsWhatsappNote').style.display=channel==='whatsapp'?'block':'none';
+  renderRmsContactOptions();
+}
+
+let rmsContacts=[];
+async function loadRmsContacts(){
+  try{ rmsContacts=await apiFetch('/api/contacts'); }catch(e){ rmsContacts=[]; }
+  renderRmsContactOptions();
+}
+function renderRmsContactOptions(){
+  const sel=document.getElementById('rmsContactSelect');
+  if(!sel)return;
+  const filtered=rmsContacts.filter(c=>rmsChannel==='email'?c.email:c.phone);
+  sel.innerHTML='<option value="">— בחר מרשימה או הקלד למטה —</option>'+
+    filtered.map(c=>`<option value="${c.id}">${c.name} — ${rmsChannel==='email'?c.email:c.phone}</option>`).join('');
+}
+function rmsPickContact(id){
+  if(!id)return;
+  const c=rmsContacts.find(x=>x.id===parseInt(id));
+  if(!c)return;
+  document.getElementById('rmsTo').value=(rmsChannel==='email'?c.email:c.phone)||'';
+}
+async function rmsSaveContact(){
+  const to=document.getElementById('rmsTo').value.trim();
+  if(!to){ showToast('נא להזין איש קשר קודם'); return; }
+  const name=prompt('שם איש הקשר לשמירה:');
+  if(!name||!name.trim())return;
+  try{
+    const body={name:name.trim()};
+    body[rmsChannel==='email'?'email':'phone']=to;
+    await apiFetch('/api/contacts',{method:'POST',body:JSON.stringify(body)});
+    showToast('איש הקשר נשמר');
+    await loadRmsContacts();
+  }catch(e){ showToast(e.message); }
 }
 
 async function submitRawMatSend(){
