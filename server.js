@@ -342,6 +342,7 @@ app.get('/api/skus/:id/docs', requireAssistant, ah(async (req, res) => {
   });
   res.json(links.filter(l => l.document).map(l => ({
     id: l.document.id, name: l.document.title, ext: l.document.docExt || '', doctype: l.document.docType || '',
+    linkId: l.id, isRawMaterial: l.isRawMaterial, approvalStatus: l.approvalStatus,
   })));
 }));
 
@@ -584,12 +585,13 @@ app.patch('/api/sku-links/:id', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const link = await prisma.skuLink.findUnique({ where: { id }, include: { sku: true, document: true } });
   if (!link) return res.status(404).json({ error: 'רשומה לא נמצאה' });
-  const { approvalStatus, kashrutLevel } = req.body;
+  const { approvalStatus, kashrutLevel, isRawMaterial } = req.body;
   if (approvalStatus !== undefined && !['PENDING','APPROVED','REJECTED'].includes(approvalStatus))
     return res.status(400).json({ error: 'סטטוס לא תקין' });
   const updates = { reviewedById: req.user.id || null, reviewedAt: new Date() };
   if (approvalStatus !== undefined) updates.approvalStatus = approvalStatus;
   if (kashrutLevel   !== undefined) updates.kashrutLevel   = kashrutLevel;
+  if (isRawMaterial  !== undefined) updates.isRawMaterial  = !!isRawMaterial;
   const updated = await prisma.skuLink.update({
     where: { id }, data: updates, include: { sku: true, document: true },
   });

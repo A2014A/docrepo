@@ -1228,6 +1228,10 @@ initAuth();loadStats();loadTags();loadDocs();
         <button type="button" class="btn btn-outline" style="width:100%" onclick="openSkuPicker('rawmat')">🔍 בחר מקט</button>
         <div id="rawMatSkuPills" class="tags-input-wrap" style="min-height:32px;margin-top:6px"></div>
       </div>
+      <div class="form-group" id="rawMatExistingDocsGroup" style="display:none">
+        <label class="form-label">מסמכים קיימים במערכת עבור מק"ט זה (אפשר לשלוח לאישור בלי לצלם שוב)</label>
+        <div id="rawMatExistingDocsList" style="max-height:150px;overflow-y:auto;border:1px solid var(--border2);border-radius:8px;padding:6px"></div>
+      </div>
       <div class="form-group">
         <label class="form-label">רמת כשרות (אם ידועה כבר)</label>
         <input type="text" class="form-input" id="rawMatKashrusLevel" placeholder="מהדרין / בית יוסף / עדה חרדית..."/>
@@ -1381,6 +1385,7 @@ async function applySkuBulkEdit(){
 
 /* ══════════ RAW MATERIAL APPROVALS (ניהול אישור חמרי גלם) ══════════ */
 let rawMatFiles=[], rawMatSelectedSku=null, rawMatFilterStatus='', rawMatData=[]; // rawMatFiles: [{file, doctype}]
+let rawMatExistingDocs=[], rawMatSelectedExistingIds=new Set();
 const RAW_MAT_STATUS_LABEL={PENDING:'⏳ ממתין לאישור',APPROVED:'✓ מאושר',REJECTED:'✕ נדחה'};
 const RAW_MAT_STATUS_COLOR={PENDING:'background:#fef9c3;color:#854d0e',APPROVED:'background:#dcfce7;color:#166534',REJECTED:'background:#fee2e2;color:#991b1b'};
 
@@ -1447,6 +1452,7 @@ function renderRawMaterials(){
       <button class="btn btn-outline" style="font-size:.78rem;padding:5px 10px" onclick="updateRawMatStatus(${r.linkId},null,document.getElementById('rmlevel_${r.linkId}').value)">שמור רמה</button>
       <button class="btn btn-outline" style="font-size:.78rem;padding:5px 10px" onclick="openRawMatSkuDocs('${r.skuId}')">📎 כל המסמכים למקט</button>
       <button class="btn btn-accent" style="font-size:.78rem;padding:5px 10px" onclick="openRawMatSend(${r.linkId})">📤 שלח</button>
+      ${effectiveRole()==='admin'?`<button class="icon-btn del" title="מחיקה" onclick="deleteRawMatItem(${r.docId})">🗑</button>`:''}
     </div>`).join('');
   document.getElementById('rawMatCount').textContent=`סה"כ: ${rawMatData.length} חומרי גלם`;
 }
@@ -1462,6 +1468,15 @@ async function updateRawMatStatus(linkId,approvalStatus,kashrutLevel){
   }catch(e){ showToast(e.message); }
 }
 
+async function deleteRawMatItem(docId){
+  if(!confirm('למחוק פריט זה מהרשימה?'))return;
+  try{
+    await apiFetch('/api/docs/'+docId,{method:'DELETE'});
+    showToast('הפריט נמחק');
+    await loadRawMaterials();
+  }catch(e){ showToast(e.message); }
+}
+
 async function openRawMatSkuDocs(skuId){
   if(!reportData.length) await loadReport();
   closeRawMaterials();
@@ -1471,12 +1486,15 @@ async function openRawMatSkuDocs(skuId){
 function resetRawMatForm(){
   rawMatFiles=[];
   rawMatSelectedSku=null;
+  rawMatExistingDocs=[];
+  rawMatSelectedExistingIds=new Set();
   document.getElementById('rawMatAddAlert').innerHTML='';
   document.getElementById('rawMatKashrusLevel').value='';
   document.getElementById('rawMatPhotoInput').value='';
   document.getElementById('rawMatPhotoInputFile').value='';
   renderRawMatFilesPreview();
   renderRawMatSkuPill();
+  renderRawMatExistingDocsList();
 }
 
 function onRawMatPhotoChosen(input){
@@ -1515,18 +1533,56 @@ function renderRawMatFilesPreview(){
 function renderRawMatSkuPill(){
   const el=document.getElementById('rawMatSkuPills');
   if(!rawMatSelectedSku){ el.innerHTML=''; return; }
-  el.innerHTML=`<span class="tag-pill">${rawMatSelectedSku.id} — ${rawMatSelectedSku.name} <span onclick="rawMatSelectedSku=null;renderRawMatSkuPill()" style="cursor:pointer;margin-right:4px">✕</span></span>`;
+  el.innerHTML=`<span class="tag-pill">${rawMatSelectedSku.id} — ${rawMatSelectedSku.name} <span onclick="rawMatSelectedSku=null;rawMatExistingDocs=[];rawMatSelectedExistingIds=new Set();renderRawMatSkuPill();renderRawMatExistingDocsList()" style="cursor:pointer;margin-right:4px">✕</span></span>`;
+}
+
+async function loadRawMatExistingDocs(){
+  rawMatSelectedExistingIds=new Set();
+  if(!rawMatSelectedSku){ rawMatExistingDocs=[]; renderRawMatExistingDocsList(); return; }
+  document.getElementById('rawMatExistingDocsGroup').style.display='block';
+  document.getElementById('rawMatExistingDocsList').innerHTML='<div style="text-align:center;padding:8px;color:var(--ink3);font-size:.8rem">טוען...</div>';
+  try{
+    rawMatExistingDocs=await apiFetch('/api/skus/'+rawMatSelectedSku.id+'/docs');
+  }catch(e){
+    rawMatExistingDocs=[];
+  }
+  renderRawMatExistingDocsList();
+}
+
+function renderRawMatExistingDocsList(){
+  const group=document.getElementById('rawMatExistingDocsGroup');
+  const el=document.getElementById('rawMatExistingDocsList');
+  if(!rawMatSelectedSku){ group.style.display='none'; return; }
+  group.style.display='block';
+  if(!rawMatExistingDocs.length){ el.innerHTML='<div style="text-align:center;padding:8px;color:var(--ink3);font-size:.8rem">אין מסמכים קיימים למקט זה</div>'; return; }
+  el.innerHTML=rawMatExistingDocs.map(d=>{
+    if(d.isRawMaterial){
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 4px;font-size:.82rem;color:var(--ink3)">
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${jsAttr(d.name)}</span>
+        <span style="font-size:.7rem">${RAW_MAT_STATUS_LABEL[d.approvalStatus]||d.approvalStatus} (כבר במעקב)</span>
+      </div>`;
+    }
+    return `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;font-size:.82rem">
+      <input type="checkbox" ${rawMatSelectedExistingIds.has(d.linkId)?'checked':''} onchange="rawMatToggleExistingDoc(${d.linkId},this.checked)"/>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${jsAttr(d.name)}</span>
+      ${d.doctype?`<span style="font-size:.7rem;color:var(--ink3)">${d.doctype}</span>`:''}
+    </label>`;
+  }).join('');
+}
+function rawMatToggleExistingDoc(linkId,checked){
+  if(checked) rawMatSelectedExistingIds.add(linkId); else rawMatSelectedExistingIds.delete(linkId);
 }
 
 async function submitRawMaterial(){
-  if(!rawMatFiles.length){ document.getElementById('rawMatAddAlert').innerHTML='<div class="alert alert-error">נא לצלם או לבחור לפחות קובץ אחד</div>'; return; }
+  if(!rawMatFiles.length && !rawMatSelectedExistingIds.size){ document.getElementById('rawMatAddAlert').innerHTML='<div class="alert alert-error">נא לצלם/לבחור קובץ חדש, או לסמן מסמך קיים למק"ט</div>'; return; }
   if(!rawMatSelectedSku){ document.getElementById('rawMatAddAlert').innerHTML='<div class="alert alert-error">נא לבחור מקט</div>'; return; }
   const btn=document.getElementById('rawMatSubmitBtn');
   btn.disabled=true;
   const kashrutLevel=document.getElementById('rawMatKashrusLevel').value.trim();
-  let ok=0, fail=0;
+  const total=rawMatFiles.length+rawMatSelectedExistingIds.size;
+  let done=0, ok=0, fail=0;
   for(let i=0;i<rawMatFiles.length;i++){
-    btn.textContent=`שולח ${i+1} מתוך ${rawMatFiles.length}...`;
+    btn.textContent=`שולח ${++done} מתוך ${total}...`;
     const {file,doctype}=rawMatFiles[i];
     const dt=doctype||'תויות';
     try{
@@ -1544,12 +1600,19 @@ async function submitRawMaterial(){
       ok++;
     }catch(e){ fail++; }
   }
+  for(const linkId of rawMatSelectedExistingIds){
+    btn.textContent=`שולח ${++done} מתוך ${total}...`;
+    try{
+      await apiFetch('/api/sku-links/'+linkId,{method:'PATCH',body:JSON.stringify({isRawMaterial:true,approvalStatus:'PENDING',kashrutLevel})});
+      ok++;
+    }catch(e){ fail++; }
+  }
   btn.disabled=false;btn.textContent='שלח לאישור';
   if(fail===0){
-    showToast(ok===1?'חומר הגלם נשלח לאישור':`${ok} קבצים נשלחו לאישור`);
+    showToast(ok===1?'חומר הגלם נשלח לאישור':`${ok} פריטים נשלחו לאישור`);
     rawMatTab('list');
   }else{
-    document.getElementById('rawMatAddAlert').innerHTML=`<div class="alert alert-error">${ok} קבצים נשלחו, ${fail} נכשלו</div>`;
+    document.getElementById('rawMatAddAlert').innerHTML=`<div class="alert alert-error">${ok} נשלחו, ${fail} נכשלו</div>`;
   }
 }
 
@@ -1600,7 +1663,7 @@ function rmsToggleDoc(id,checked){
   if(checked) rmsSelectedDocIds.add(id); else rmsSelectedDocIds.delete(id);
 }
 function rmsAddExtraFiles(input){
-  for(const file of input.files) rmsExtraFiles.push(file);
+  for(const file of input.files) rmsExtraFiles.push({file, doctype: file.type.startsWith('image/') ? 'תויות' : ''});
   input.value='';
   renderRmsExtraFilesList();
 }
@@ -1609,9 +1672,13 @@ function rmsRemoveExtraFile(i){
   renderRmsExtraFilesList();
 }
 function renderRmsExtraFilesList(){
-  document.getElementById('rmsExtraFilesList').innerHTML=rmsExtraFiles.map((f,i)=>`
+  document.getElementById('rmsExtraFilesList').innerHTML=rmsExtraFiles.map((entry,i)=>`
     <div style="display:flex;align-items:center;gap:6px;font-size:.8rem;background:var(--bg2);border-radius:6px;padding:4px 8px">
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ${jsAttr(f.name)}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ${jsAttr(entry.file.name)}</span>
+      <select class="form-select" style="width:auto;font-size:.75rem;padding:2px 6px" onchange="rmsExtraFiles[${i}].doctype=this.value">
+        <option value="">— סוג —</option>
+        ${DOCTYPE_OPTIONS.map(o=>`<option value="${o}" ${entry.doctype===o?'selected':''}>${o}</option>`).join('')}
+      </select>
       <span onclick="rmsRemoveExtraFile(${i})" style="cursor:pointer">✕</span>
     </div>`).join('');
 }
@@ -1657,20 +1724,41 @@ async function rmsSaveContact(){
   }catch(e){ showToast(e.message); }
 }
 
+async function persistRmsExtraFiles(skuId){
+  // קובץ שצורף מהמחשב בתוך מסך השליחה מקושר מעכשיו גם למק"ט לצמיתות
+  // (לא רק מצורף לשליחה החד-פעמית הזו) -- אותה לוגיקה כמו קבצים חדשים
+  // במסך "הוספת חומר גלם".
+  for(const entry of rmsExtraFiles){
+    const dt=entry.doctype||'תויות';
+    const fd=new FormData();
+    fd.append('file',entry.file);
+    fd.append('name',entry.file.name.replace(/\.[^.]+$/,''));
+    fd.append('doctype',dt);
+    fd.append('hidden',String(!VISIBLE_DOCTYPES.includes(dt)));
+    fd.append('skus',JSON.stringify([{id:skuId}]));
+    fd.append('approvalStatus','PENDING');
+    fd.append('isRawMaterial','true');
+    await fetch(API+'/api/docs',{method:'POST',headers:authHeaders(),body:fd}).catch(()=>{});
+  }
+}
+
 async function submitRawMatSend(){
   const to=document.getElementById('rmsTo').value.trim();
   const message=document.getElementById('rmsMessage').value;
+  const r=rawMatData.find(x=>x.linkId===rmsCurrentLinkId);
+  if(!r)return;
   if(!to){ document.getElementById('rawMatSendAlert').innerHTML='<div class="alert alert-error">נא להזין איש קשר</div>'; return; }
   if(!rmsSelectedDocIds.size && !rmsExtraFiles.length){ document.getElementById('rawMatSendAlert').innerHTML='<div class="alert alert-error">נא לבחור לפחות מסמך אחד לצירוף</div>'; return; }
   const btn=document.getElementById('rmsSendBtn');
   btn.disabled=true;btn.textContent='שולח...';
   try{
+    if(rmsExtraFiles.length) await persistRmsExtraFiles(r.skuId);
     if(rmsChannel==='email'){
       const fd=new FormData();
       fd.append('to',to);
       fd.append('message',message);
       fd.append('docIds',JSON.stringify([...rmsSelectedDocIds]));
-      rmsExtraFiles.forEach(f=>fd.append('files',f));
+      rmsExtraFiles.forEach(entry=>fd.append('files',entry.file));
       const res=await fetch(API+'/api/sku-links/'+rmsCurrentLinkId+'/send-email',{method:'POST',headers:authHeaders(),body:fd});
       if(!res.ok){ const j=await res.json().catch(()=>({error:'שגיאה בשליחה'})); throw new Error(j.error||'שגיאה בשליחה'); }
       showToast('המייל נשלח בהצלחה');
@@ -1688,7 +1776,7 @@ async function submitRawMatSend(){
         const blob=await res.blob();
         return new File([blob],d.name+(d.ext?'.'+d.ext:''),{type:blob.type||'application/octet-stream'});
       }));
-      const allFiles=[...fetchedFiles,...rmsExtraFiles];
+      const allFiles=[...fetchedFiles,...rmsExtraFiles.map(entry=>entry.file)];
       if(navigator.canShare && navigator.canShare({files:allFiles})){
         try{
           await navigator.share({files:allFiles,text:message});
@@ -2629,6 +2717,7 @@ function confirmSkuPicker() {
   } else if (spMode === 'rawmat') {
     rawMatSelectedSku = chosen[0] || null;
     renderRawMatSkuPill();
+    loadRawMatExistingDocs();
   } else {
     fileSkus[spFileIdx] = chosen;
     renderSkuPills('file', spFileIdx);
