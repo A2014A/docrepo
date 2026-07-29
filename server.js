@@ -16,12 +16,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'docrepo_secret_change_in_prod';
 
 function getMailer() {
   if (!process.env.EMAIL_FROM || !process.env.EMAIL_APP_PASSWORD) return null;
-  // yehuda@cohenb.com is Microsoft 365, not Gmail -- SMTP AUTH against
-  // smtp.office365.com, not nodemailer's 'gmail' service shortcut.
   return nodemailer.createTransport({
-    host: 'smtp.office365.com',
-    port: 587,
-    secure: false, // STARTTLS on port 587, not implicit TLS
+    service: 'gmail',
     auth: { user: process.env.EMAIL_FROM, pass: process.env.EMAIL_APP_PASSWORD },
   });
 }
