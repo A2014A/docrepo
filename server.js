@@ -421,7 +421,7 @@ app.get('/api/docs', ah(async (req, res) => {
 /* ── POST single ── */
 app.post('/api/docs', requireAssistant, upload.single('file'), ah(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
-  const { name, description, tags, doctype, hidden, skus, expiry_date, production_date } = req.body;
+  const { name, description, tags, doctype, hidden, skus, expiry_date, production_date, approvalStatus, kashrutLevel, isRawMaterial } = req.body;
   const docName    = name || req.file.originalname.replace(/\.[^.]+$/,'');
   const ext        = path.extname(req.file.originalname).replace('.','').toLowerCase();
   const parsedTags = tags ? JSON.parse(tags).map(t=>t.trim()).filter(Boolean) : ['כללי'];
@@ -443,7 +443,12 @@ app.post('/api/docs', requireAssistant, upload.single('file'), ah(async (req, re
   for (const s of parsedSkus) {
     const sku = await prisma.sku.findUnique({ where: { code: String(s.id) } });
     if (sku) await prisma.skuLink.create({
-      data: { skuId: sku.id, docType: 'DOCUMENT', documentId: doc.id, approvalStatus: 'APPROVED', visibleToCustomer: false },
+      data: {
+        skuId: sku.id, docType: 'DOCUMENT', documentId: doc.id, visibleToCustomer: false,
+        approvalStatus: approvalStatus || 'APPROVED',
+        kashrutLevel: kashrutLevel || null,
+        isRawMaterial: isRawMaterial === 'true',
+      },
     });
   }
   res.status(201).json(docOut(doc, await batchDocContext([doc.id])));
@@ -478,7 +483,7 @@ app.patch('/api/docs/:id', requireAssistant, ah(async (req, res) => {
   const id  = parseInt(req.params.id);
   const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
-  const { name, description, tags, doctype, hidden, skus, expiry_date, production_date } = req.body;
+  const { name, description, tags, doctype, hidden, skus, expiry_date, production_date, approvalStatus, kashrutLevel, isRawMaterial } = req.body;
   const updates = {};
   if (name            !== undefined) updates.title          = name;
   if (description      !== undefined) updates.description   = description;
@@ -490,11 +495,19 @@ app.patch('/api/docs/:id', requireAssistant, ah(async (req, res) => {
   const updated = await prisma.document.update({ where: { id }, data: updates });
 
   if (skus !== undefined) {
+    // replacing the sku list always recreates the links -- callers that care
+    // about approval tracking (the raw-material screen) update the SkuLink
+    // row directly via PATCH /api/sku-links/:id instead of touching skus[].
     await prisma.skuLink.deleteMany({ where: { docType: 'DOCUMENT', documentId: id } });
     for (const s of skus) {
       const sku = await prisma.sku.findUnique({ where: { code: String(s.id) } });
       if (sku) await prisma.skuLink.create({
-        data: { skuId: sku.id, docType: 'DOCUMENT', documentId: id, approvalStatus: 'APPROVED', visibleToCustomer: false },
+        data: {
+          skuId: sku.id, docType: 'DOCUMENT', documentId: id, visibleToCustomer: false,
+          approvalStatus: approvalStatus || 'APPROVED',
+          kashrutLevel: kashrutLevel || null,
+          isRawMaterial: isRawMaterial === 'true',
+        },
       });
     }
   }
@@ -511,6 +524,54 @@ app.delete('/api/docs/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ ok: true });
   // note: intentionally not deleting the R2 object -- keep it recoverable; a
   // separate cleanup pass can reap orphaned keys later if storage cost matters.
+}));
+
+/* ── RAW MATERIAL APPROVALS (ניהול אישור חמרי גלם) ──
+ * A raw-material entry is a photographed label (a Document) linked to an
+ * existing SKU via a SkuLink flagged isRawMaterial:true, tracked through
+ * approvalStatus (PENDING/APPROVED/REJECTED) and a free-text kashrutLevel
+ * as correspondence with the kashrut body (בד"ץ) progresses. Reuses the
+ * regular document upload (POST /api/docs) for the photo itself -- this is
+ * just the read/status-update side. */
+function rawMaterialOut(link) {
+  return {
+    linkId: link.id,
+    skuId: link.sku.code, skuName: link.sku.name,
+    docId: link.document.id, docName: link.document.title, docExt: link.document.docExt || '',
+    approvalStatus: link.approvalStatus, kashrutLevel: link.kashrutLevel || '',
+    createdAt: link.createdAt,
+  };
+}
+
+app.get('/api/raw-materials', requireAssistant, ah(async (req, res) => {
+  const { status, q } = req.query;
+  const where = { isRawMaterial: true };
+  if (status) where.approvalStatus = status;
+  const links = await prisma.skuLink.findMany({
+    where, include: { sku: true, document: true }, orderBy: { createdAt: 'desc' },
+  });
+  let out = links.filter(l => l.sku && l.document).map(rawMaterialOut);
+  if (q) {
+    const ql = q.toLowerCase();
+    out = out.filter(r => r.skuId.includes(q) || r.skuName.toLowerCase().includes(ql));
+  }
+  res.json(out);
+}));
+
+app.patch('/api/sku-links/:id', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const link = await prisma.skuLink.findUnique({ where: { id }, include: { sku: true, document: true } });
+  if (!link) return res.status(404).json({ error: 'רשומה לא נמצאה' });
+  const { approvalStatus, kashrutLevel } = req.body;
+  if (approvalStatus !== undefined && !['PENDING','APPROVED','REJECTED'].includes(approvalStatus))
+    return res.status(400).json({ error: 'סטטוס לא תקין' });
+  const updates = { reviewedById: req.user.id || null, reviewedAt: new Date() };
+  if (approvalStatus !== undefined) updates.approvalStatus = approvalStatus;
+  if (kashrutLevel   !== undefined) updates.kashrutLevel   = kashrutLevel;
+  const updated = await prisma.skuLink.update({
+    where: { id }, data: updates, include: { sku: true, document: true },
+  });
+  res.json(rawMaterialOut(updated));
 }));
 
 /* ── ROLE CODES ── */

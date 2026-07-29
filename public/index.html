@@ -182,6 +182,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       <div class="sidebar-title">ניהול</div>
       <button class="btn btn-accent" style="width:100%;padding:10px" onclick="openUpload()">+ העלאת מסמכים</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openSkuManager()">⚙ ניהול מקטים</button>
+      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRawMaterials()">🧪 ניהול אישור חמרי גלם</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRoleCodes()">🔑 ניהול קודי גישה</button>
       <button class="btn btn-outline" id="unlinkedToggleBtn" style="width:100%;padding:8px;margin-top:8px" onclick="toggleUnlinkedFilter()">🔗 מסמכים לא מקושרים למקט</button>
@@ -1183,6 +1184,58 @@ initAuth();loadStats();loadTags();loadDocs();
   </div>
 </div>
 
+<!-- RAW MATERIAL APPROVAL MODAL -->
+<div class="modal-bg" id="rawMaterialModal">
+  <div class="modal" style="max-width:820px;width:96vw">
+    <div class="modal-header">
+      <div class="modal-title">ניהול אישור חמרי גלם</div>
+      <button class="modal-close" onclick="closeRawMaterials()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border2);padding-bottom:10px">
+      <button class="btn btn-accent"  id="rawMatTabList" onclick="rawMatTab('list')">רשימה</button>
+      <button class="btn btn-outline" id="rawMatTabAdd"  onclick="rawMatTab('add')">+ הוספת חומר גלם</button>
+    </div>
+
+    <!-- רשימה -->
+    <div id="rawMatPaneList">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+        <button class="btn btn-outline" id="rmFilterAll"      onclick="rawMatFilter('')"         style="font-size:.8rem">הכל</button>
+        <button class="btn btn-outline" id="rmFilterPending"  onclick="rawMatFilter('PENDING')"  style="font-size:.8rem">⏳ ממתין לאישור</button>
+        <button class="btn btn-outline" id="rmFilterApproved" onclick="rawMatFilter('APPROVED')" style="font-size:.8rem">✓ מאושר</button>
+        <button class="btn btn-outline" id="rmFilterRejected" onclick="rawMatFilter('REJECTED')" style="font-size:.8rem">✕ נדחה</button>
+        <input type="text" class="form-input" id="rawMatSearch" placeholder="חפש לפי מקט..." oninput="loadRawMaterials()" style="flex:1;min-width:140px;font-size:.85rem"/>
+      </div>
+      <div id="rawMatList" style="max-height:460px;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
+      <div id="rawMatCount" style="margin-top:8px;font-size:.8rem;color:var(--ink3)"></div>
+    </div>
+
+    <!-- הוספה -->
+    <div id="rawMatPaneAdd" style="display:none">
+      <div id="rawMatAddAlert"></div>
+      <div class="form-group">
+        <label class="form-label">תמונת תווית</label>
+        <div style="display:flex;gap:8px">
+          <button type="button" class="btn btn-outline" style="flex:1" onclick="document.getElementById('rawMatPhotoInput').click()">📷 צלם תווית</button>
+          <button type="button" class="btn btn-outline" style="flex:1" onclick="document.getElementById('rawMatPhotoInputFile').click()">🖼 בחר מהגלריה</button>
+        </div>
+        <input type="file" id="rawMatPhotoInput" accept="image/*" capture="environment" style="display:none" onchange="onRawMatPhotoChosen(this)"/>
+        <input type="file" id="rawMatPhotoInputFile" accept="image/*,.pdf" style="display:none" onchange="onRawMatPhotoChosen(this)"/>
+        <div id="rawMatPhotoPreview" style="margin-top:10px"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">מקט</label>
+        <button type="button" class="btn btn-outline" style="width:100%" onclick="openSkuPicker('rawmat')">🔍 בחר מקט</button>
+        <div id="rawMatSkuPills" class="tags-input-wrap" style="min-height:32px;margin-top:6px"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">רמת כשרות (אם ידועה כבר)</label>
+        <input type="text" class="form-input" id="rawMatKashrusLevel" placeholder="מהדרין / בית יוסף / עדה חרדית..."/>
+      </div>
+      <button class="btn btn-accent" style="margin-top:6px" id="rawMatSubmitBtn" onclick="submitRawMaterial()">שלח לאישור</button>
+    </div>
+  </div>
+</div>
+
 
 <script>
 /* ══════════ SKU MANAGER ══════════ */
@@ -1280,6 +1333,150 @@ async function applySkuBulkEdit(){
   closeSkuBulkEdit();
   clearSkuSelection();
   loadSkuList();
+}
+
+/* ══════════ RAW MATERIAL APPROVALS (ניהול אישור חמרי גלם) ══════════ */
+let rawMatPhotoFile=null, rawMatSelectedSku=null, rawMatFilterStatus='', rawMatData=[];
+const RAW_MAT_STATUS_LABEL={PENDING:'⏳ ממתין לאישור',APPROVED:'✓ מאושר',REJECTED:'✕ נדחה'};
+const RAW_MAT_STATUS_COLOR={PENDING:'background:#fef9c3;color:#854d0e',APPROVED:'background:#dcfce7;color:#166534',REJECTED:'background:#fee2e2;color:#991b1b'};
+
+function openRawMaterials(){
+  document.getElementById('rawMaterialModal').classList.add('open');
+  rawMatTab('list');
+}
+function closeRawMaterials(){
+  document.getElementById('rawMaterialModal').classList.remove('open');
+}
+function rawMatTab(t){
+  document.getElementById('rawMatPaneList').style.display=t==='list'?'':'none';
+  document.getElementById('rawMatPaneAdd').style.display=t==='add'?'':'none';
+  document.getElementById('rawMatTabList').className='btn '+(t==='list'?'btn-accent':'btn-outline');
+  document.getElementById('rawMatTabAdd').className='btn '+(t==='add'?'btn-accent':'btn-outline');
+  if(t==='list') loadRawMaterials();
+  if(t==='add') resetRawMatForm();
+}
+
+function rawMatFilter(status){
+  rawMatFilterStatus=status;
+  ['All','Pending','Approved','Rejected'].forEach(s=>{
+    const btn=document.getElementById('rmFilter'+s);
+    const match=(s==='All'&&status==='')||s.toUpperCase()===status;
+    if(btn) btn.className='btn '+(match?'btn-accent':'btn-outline');
+  });
+  loadRawMaterials();
+}
+
+async function loadRawMaterials(){
+  const q=document.getElementById('rawMatSearch').value.trim();
+  document.getElementById('rawMatList').innerHTML='<div class="loading"><div class="spinner"></div>טוען...</div>';
+  try{
+    let url='/api/raw-materials?';
+    if(rawMatFilterStatus) url+='status='+rawMatFilterStatus+'&';
+    if(q) url+='q='+encodeURIComponent(q);
+    rawMatData=await apiFetch(url);
+    renderRawMaterials();
+  }catch(e){
+    document.getElementById('rawMatList').innerHTML=`<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+function renderRawMaterials(){
+  if(!rawMatData.length){
+    document.getElementById('rawMatList').innerHTML='<div style="text-align:center;padding:2rem;color:var(--ink3)">לא נמצאו חומרי גלם</div>';
+    document.getElementById('rawMatCount').textContent='';
+    return;
+  }
+  document.getElementById('rawMatList').innerHTML=rawMatData.map(r=>`
+    <div style="border:1px solid var(--border2);border-radius:8px;padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="icon-btn" title="צפה בתמונה" onclick="guardedView(${r.docId},'${r.docExt}','${jsAttr(r.docName)}')" style="flex-shrink:0">👁</button>
+      <div style="flex:1;min-width:180px">
+        <div style="font-weight:600">${r.skuId} — ${r.skuName}</div>
+        <div style="font-size:.78rem;color:var(--ink3)">${r.docName} · ${fmtDate(r.createdAt)}</div>
+      </div>
+      <span style="font-size:.75rem;padding:3px 9px;border-radius:99px;white-space:nowrap;${RAW_MAT_STATUS_COLOR[r.approvalStatus]||''}">${RAW_MAT_STATUS_LABEL[r.approvalStatus]||r.approvalStatus}</span>
+      <select class="form-select" style="width:auto;font-size:.8rem" onchange="updateRawMatStatus(${r.linkId},this.value,null)">
+        <option value="PENDING" ${r.approvalStatus==='PENDING'?'selected':''}>ממתין לאישור</option>
+        <option value="APPROVED" ${r.approvalStatus==='APPROVED'?'selected':''}>מאושר</option>
+        <option value="REJECTED" ${r.approvalStatus==='REJECTED'?'selected':''}>נדחה</option>
+      </select>
+      <input type="text" class="form-input" style="width:150px;font-size:.8rem" placeholder="רמת כשרות..." value="${r.kashrutLevel||''}" id="rmlevel_${r.linkId}"/>
+      <button class="btn btn-outline" style="font-size:.78rem;padding:5px 10px" onclick="updateRawMatStatus(${r.linkId},null,document.getElementById('rmlevel_${r.linkId}').value)">שמור רמה</button>
+      <button class="btn btn-outline" style="font-size:.78rem;padding:5px 10px" onclick="openRawMatSkuDocs('${r.skuId}')">📎 כל המסמכים למקט</button>
+    </div>`).join('');
+  document.getElementById('rawMatCount').textContent=`סה"כ: ${rawMatData.length} חומרי גלם`;
+}
+
+async function updateRawMatStatus(linkId,approvalStatus,kashrutLevel){
+  const body={};
+  if(approvalStatus!==null) body.approvalStatus=approvalStatus;
+  if(kashrutLevel!==null) body.kashrutLevel=kashrutLevel;
+  try{
+    await apiFetch('/api/sku-links/'+linkId,{method:'PATCH',body:JSON.stringify(body)});
+    showToast('עודכן בהצלחה');
+    await loadRawMaterials();
+  }catch(e){ showToast(e.message); }
+}
+
+async function openRawMatSkuDocs(skuId){
+  if(!reportData.length) await loadReport();
+  closeRawMaterials();
+  openSkuDocs(skuId);
+}
+
+function resetRawMatForm(){
+  rawMatPhotoFile=null;
+  rawMatSelectedSku=null;
+  document.getElementById('rawMatAddAlert').innerHTML='';
+  document.getElementById('rawMatPhotoPreview').innerHTML='';
+  document.getElementById('rawMatKashrusLevel').value='';
+  document.getElementById('rawMatPhotoInput').value='';
+  document.getElementById('rawMatPhotoInputFile').value='';
+  renderRawMatSkuPill();
+}
+
+function onRawMatPhotoChosen(input){
+  const file=input.files[0];
+  if(!file)return;
+  rawMatPhotoFile=file;
+  const preview=document.getElementById('rawMatPhotoPreview');
+  if(file.type.startsWith('image/')){
+    const url=URL.createObjectURL(file);
+    preview.innerHTML=`<img src="${url}" style="max-width:100%;max-height:220px;border-radius:8px;border:1px solid var(--border2)"/>`;
+  }else{
+    preview.innerHTML=`<div style="padding:8px 12px;border:1px solid var(--border2);border-radius:8px;font-size:.85rem">📄 ${jsAttr(file.name)}</div>`;
+  }
+}
+
+function renderRawMatSkuPill(){
+  const el=document.getElementById('rawMatSkuPills');
+  if(!rawMatSelectedSku){ el.innerHTML=''; return; }
+  el.innerHTML=`<span class="tag-pill">${rawMatSelectedSku.id} — ${rawMatSelectedSku.name} <span onclick="rawMatSelectedSku=null;renderRawMatSkuPill()" style="cursor:pointer;margin-right:4px">✕</span></span>`;
+}
+
+async function submitRawMaterial(){
+  if(!rawMatPhotoFile){ document.getElementById('rawMatAddAlert').innerHTML='<div class="alert alert-error">נא לצלם או לבחור תמונת תווית</div>'; return; }
+  if(!rawMatSelectedSku){ document.getElementById('rawMatAddAlert').innerHTML='<div class="alert alert-error">נא לבחור מקט</div>'; return; }
+  const btn=document.getElementById('rawMatSubmitBtn');
+  btn.disabled=true;btn.textContent='שולח...';
+  try{
+    const fd=new FormData();
+    fd.append('file',rawMatPhotoFile);
+    fd.append('name',`תווית ${rawMatSelectedSku.id} — ${rawMatSelectedSku.name}`);
+    fd.append('doctype','תויות');
+    fd.append('hidden','true');
+    fd.append('skus',JSON.stringify([{id:rawMatSelectedSku.id}]));
+    fd.append('approvalStatus','PENDING');
+    fd.append('kashrutLevel',document.getElementById('rawMatKashrusLevel').value.trim());
+    fd.append('isRawMaterial','true');
+    const res=await fetch(API+'/api/docs',{method:'POST',headers:authHeaders(),body:fd});
+    if(!res.ok){ const j=await res.json().catch(()=>({error:'שגיאה בהעלאה'})); throw new Error(j.error||'שגיאה בהעלאה'); }
+    showToast('חומר הגלם נשלח לאישור');
+    rawMatTab('list');
+  }catch(e){
+    document.getElementById('rawMatAddAlert').innerHTML=`<div class="alert alert-error">${e.message}</div>`;
+  }finally{
+    btn.disabled=false;btn.textContent='שלח לאישור';
+  }
 }
 
 function openSkuManager(){
@@ -2090,7 +2287,7 @@ async function openSkuPicker(mode, idx) {
 
   // הגדר נבחרים קיימים
   spSelected = new Set();
-  const existing = mode === 'edit' ? editSkus : mode === 'bulk' ? bulkSkuSelection : (fileSkus[idx] || []);
+  const existing = mode === 'edit' ? editSkus : mode === 'bulk' ? bulkSkuSelection : mode === 'rawmat' ? (rawMatSelectedSku ? [rawMatSelectedSku] : []) : (fileSkus[idx] || []);
   existing.forEach(s => spSelected.add(s.id));
 
   // נקה פילטרים
@@ -2157,7 +2354,10 @@ function renderSkuPicker() {
 
 function spToggle(id) {
   const sid = String(id);
-  if (spSelected.has(sid)) spSelected.delete(sid);
+  if (spMode === 'rawmat') {
+    // בחירה בודדת -- חומר גלם אחד מוצמד למקט אחד
+    spSelected = spSelected.has(sid) ? new Set() : new Set([sid]);
+  } else if (spSelected.has(sid)) spSelected.delete(sid);
   else spSelected.add(sid);
   renderSkuPicker();
 }
@@ -2190,12 +2390,15 @@ function confirmSkuPicker() {
   } else if (spMode === 'bulk') {
     bulkSkuSelection = chosen;
     renderSkuPills('bulk');
+  } else if (spMode === 'rawmat') {
+    rawMatSelectedSku = chosen[0] || null;
+    renderRawMatSkuPill();
   } else {
     fileSkus[spFileIdx] = chosen;
     renderSkuPills('file', spFileIdx);
   }
   closeSkuPicker();
-  showToast(`${chosen.length} מקטים נוספו`);
+  if (spMode !== 'rawmat') showToast(`${chosen.length} מקטים נוספו`);
 }
 
 
