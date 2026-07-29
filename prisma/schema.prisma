@@ -166,6 +166,8 @@ model SkuLink {
   documentId        Int?
   document          Document?       @relation(fields: [documentId], references: [id])
   approvalStatus    ApprovalStatus  @default(PENDING)
+  kashrutLevel      String?         // רמת כשרות שאושרה/נמצאה על גבי התווית (מהדרין / בית יוסף / עדה חרדית וכו')
+  isRawMaterial     Boolean         @default(false) // true רק עבור רשומות שנוצרו דרך מסך "ניהול אישור חמרי גלם"
   visibleToCustomer Boolean         @default(false)
   reviewedById      Int?
   reviewedBy        User?           @relation("reviewedBy", fields: [reviewedById], references: [id])

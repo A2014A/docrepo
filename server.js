@@ -132,6 +132,17 @@ function skuOut(s) {
   };
 }
 const VALID_CERT_TYPES = ['ANNUAL', 'PER_PRODUCTION', 'ANNUAL_REGULAR_PER_PRODUCTION_PESACH'];
+const CERT_TYPE_LABEL_TO_VALUE = {
+  'תעודה שנתית': 'ANNUAL',
+  'תעודה לפי יצור': 'PER_PRODUCTION',
+  'לימות השנה שנתי, לפסח לפי יצור': 'ANNUAL_REGULAR_PER_PRODUCTION_PESACH',
+};
+function parseCertTypeCell(raw) {
+  const v = raw ? String(raw).trim() : '';
+  if (!v) return null;
+  if (VALID_CERT_TYPES.includes(v)) return v; // allows re-importing our own export
+  return CERT_TYPE_LABEL_TO_VALUE[v] || null;
+}
 
 // Batch-fetch context for docOut() -- calling prisma.skuLink.findMany() once
 // per document (via Promise.all over a whole list) exhausted the connection
@@ -292,9 +303,11 @@ app.post('/api/skus/import', requireAuth, upload.single('file'), ah(async (req, 
       const kashrus       = row[7] ? String(row[7]).trim() : '';
       const pesach        = row[8] && row[8] !== '#N/A' ? String(row[8]).trim() : '';
       const notes         = row[9] ? String(row[9]).trim() : '';
+      const certType      = parseCertTypeCell(row[10]);
       if (!id || !name || id === 'undefined') continue;
       const existing = await prisma.sku.findUnique({ where: { code: id } });
       const data = { name, supplier, supplier2, tipus, sourceFlag: source, responsible, kashrutBodyRef: kashrus, pesachStatusRef: pesach, notes };
+      if (certType) data.certType = certType; // don't blank out an existing value when the column is empty for this row
       if (existing) {
         await prisma.sku.update({ where: { code: id }, data });
         updated++;
