@@ -1336,6 +1336,11 @@ async function loadSkuList(){
   if(filterSource) skus=skus.filter(s=>s.source===filterSource);
   if(selectedResps.length>0) skus=skus.filter(s=>selectedResps.includes(s.responsible||''));
   skuManagerData=skus;
+  // בחירה מרובה חייבת לשקף רק את מה שמוצג אחרי הסינון הנוכחי -- מקטים
+  // שנבחרו קודם ונעלמו בגלל שינוי סינון/חיפוש לא ימשיכו "לשבת" בבחירה בלי
+  // שרואים אותם, אחרת עריכה מרובה תשפיע גם על מקטים שכבר לא מוצגים.
+  const visibleIds=new Set(skus.map(s=>s.id));
+  skuBulkSelected=new Set([...skuBulkSelected].filter(id=>visibleIds.has(id)));
   document.getElementById('skuTableBody').innerHTML=skus.map(s=>`
     <tr style="border-bottom:1px solid var(--border1)" id="skurow_${s.id}">
       <td style="padding:7px 8px;text-align:center"><input type="checkbox" class="sku-select-cb" ${skuBulkSelected.has(s.id)?'checked':''} onchange="toggleSkuSelect('${s.id}',this.checked)"/></td>
