@@ -346,6 +346,53 @@ app.get('/api/skus/:id/docs', requireAssistant, ah(async (req, res) => {
   })));
 }));
 
+/* Weekly Priority goods-receipt report ("קבלת סחורה מספקים") -> keep the SKU
+ * list in step with what actually arrives. Idempotent: brand-new מק"טים are
+ * created (reviewedAt left null so they show up as never-reviewed); existing
+ * ones only get EMPTY name/supplier filled in -- kashrut, pesach, type,
+ * notes and anything edited by hand are never overwritten. */
+app.post('/api/skus/import-report', requireAssistant, upload.single('file'), ah(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  const XLSX = require('xlsx');
+  const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+  const header = (rows[0] || []).map(h => String(h || '').trim());
+  const col = (...names) => header.findIndex(h => names.includes(h));
+  const iCode = col("מק'ט", 'מק"ט', 'מקט');
+  const iName = col('תאור מוצר', 'תיאור מוצר');
+  const iSupplier = col('שם ספק');
+  if (iCode < 0 || iName < 0) return res.status(400).json({ error: 'זה לא דוח קבלת סחורה (חסרות עמודות מק"ט / תאור מוצר)' });
+
+  const seen = new Map(); // code -> { name, supplier }
+  for (let i = 1; i < rows.length; i++) {
+    const code = String(rows[i][iCode] ?? '').trim();
+    if (!code || seen.has(code)) continue;
+    seen.set(code, {
+      name: String(rows[i][iName] ?? '').trim(),
+      supplier: iSupplier >= 0 ? String(rows[i][iSupplier] ?? '').trim() : '',
+    });
+  }
+
+  const existing = await prisma.sku.findMany({ where: { code: { in: [...seen.keys()] } } });
+  const byCode = new Map(existing.map(s => [s.code, s]));
+  const dry = req.query.dryRun === '1';
+  const added = [], filled = [];
+  for (const [code, info] of seen) {
+    const sku = byCode.get(code);
+    if (!sku) {
+      if (!info.name) continue;
+      if (!dry) await prisma.sku.create({ data: { code, name: info.name, supplier: info.supplier || null, origin: ['priority_report'] } });
+      added.push({ id: code, name: info.name });
+    } else {
+      const upd = {};
+      if (!sku.name && info.name) upd.name = info.name;
+      if (!sku.supplier && info.supplier) upd.supplier = info.supplier;
+      if (Object.keys(upd).length) { if (!dry) await prisma.sku.update({ where: { id: sku.id }, data: upd }); filled.push(code); }
+    }
+  }
+  res.json({ ok: true, dryRun: dry, rowsInReport: seen.size, added: added.length, filledExisting: filled.length, newSkus: added });
+}));
+
 app.get('/api/skus/report', requireAuth, ah(async (req, res) => {
   // one query for all SKUs' links instead of one query per SKU (was
   // exhausting the connection pool at real data volume -- see docOut/
