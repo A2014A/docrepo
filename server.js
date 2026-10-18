@@ -138,6 +138,8 @@ function skuOut(s) {
     tipus: s.tipus || '', source: s.sourceFlag || '', responsible: s.responsible || '',
     kashrus: s.kashrutBodyRef || '', pesach: s.pesachStatusRef || '', notes: s.notes || '',
     certType: s.certType || '',
+    // never-reviewed SKU that arrived via a Priority goods-receipt report; any edit (PATCH) sets reviewedAt and clears it
+    isNew: !s.reviewedAt && (s.origin || []).includes('priority_report'),
   };
 }
 const VALID_CERT_TYPES = ['ANNUAL', 'PER_PRODUCTION', 'ANNUAL_REGULAR_PER_PRODUCTION_PESACH'];

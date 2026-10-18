@@ -1011,6 +1011,7 @@ initAuth();loadStats();loadTags();loadDocs();
           <option value="יבוא">יבוא</option>
           <option value="רכש מקומי">רכש מקומי</option>
         </select>
+        <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;white-space:nowrap;cursor:pointer"><input type="checkbox" id="skuFilterNew" onchange="loadSkuList()"/> 🆕 חדשים בלבד</label>
         <div style="position:relative;flex:1;min-width:120px" id="respDropdownWrap">
           <button type="button" id="respDropdownBtn" onclick="toggleRespDropdown()"
             style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:6px;background:var(--bg1);cursor:pointer;text-align:right;font-size:.85rem;display:flex;justify-content:space-between;align-items:center">
@@ -1855,6 +1856,7 @@ async function loadSkuList(){
   const selectedResps=getSelectedResps();
   if(filterTipus)  skus=skus.filter(s=>s.tipus===filterTipus);
   if(filterSource) skus=skus.filter(s=>s.source===filterSource);
+  if(document.getElementById('skuFilterNew')?.checked) skus=skus.filter(s=>s.isNew);
   if(selectedResps.length>0) skus=skus.filter(s=>selectedResps.includes(s.responsible||''));
   skuManagerData=skus;
   // בחירה מרובה חייבת לשקף רק את מה שמוצג אחרי הסינון הנוכחי -- מקטים
@@ -1866,7 +1868,7 @@ async function loadSkuList(){
     <tr style="border-bottom:1px solid var(--border1)" id="skurow_${s.id}">
       <td style="padding:7px 8px;text-align:center"><input type="checkbox" class="sku-select-cb" ${skuBulkSelected.has(s.id)?'checked':''} onchange="toggleSkuSelect('${s.id}',this.checked)"/></td>
       <td style="padding:7px 8px;font-weight:600;color:var(--accent2)">${s.id}</td>
-      <td style="padding:7px 8px" id="skuname_${s.id}">${s.name}</td>
+      <td style="padding:7px 8px" id="skuname_${s.id}">${s.name}${s.isNew?` <span style="font-size:.68rem;padding:1px 7px;border-radius:99px;background:#dbeafe;color:#1e40af;white-space:nowrap">🆕 חדש</span>`:''}</td>
       <td style="padding:7px 8px;text-align:center">${s.tipus?`<span style="font-size:.75rem;padding:2px 7px;border-radius:99px;background:#EEF2FF;color:#3730a3">${s.tipus}</span>`:''}</td>
       <td style="padding:7px 8px;text-align:center">${s.source?`<span style="font-size:.75rem;padding:2px 7px;border-radius:99px;background:${s.source==='יבוא'?'#fef9c3;color:#854d0e':'#dcfce7;color:#166534'}">${s.source}</span>`:''}</td>
       <td style="padding:7px 8px;color:var(--ink3);font-size:.8rem" id="skusup_${s.id}">${s.supplier||''}</td>
@@ -1877,11 +1879,13 @@ async function loadSkuList(){
       <td style="padding:7px 8px;color:var(--ink3);font-size:.8rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.notes||''}">${s.notes||''}</td>
       <td style="padding:7px 8px;text-align:center">${s.certType?`<span style="font-size:.72rem;padding:2px 7px;border-radius:99px;background:#f3e8ff;color:#6b21a8;white-space:nowrap">${certTypeLabel(s.certType)}</span>`:''}</td>
       <td style="padding:7px 8px;text-align:center;white-space:nowrap">
+        ${s.isNew?`<button class="icon-btn" onclick="markSkuReviewed('${s.id}')" title="סמן כנבדק" style="color:#1e40af">✓</button>`:''}
         <button class="icon-btn" onclick="openEditSku('${s.id}')" title="עריכה">✏️</button>
         <button class="icon-btn" onclick="deleteSku('${s.id}')" title="מחיקה" style="color:#dc2626">🗑</button>
       </td>
     </tr>`).join('');
-  document.getElementById('skuListCount').textContent=`סה"כ: ${skus.length} מקטים`;
+  const newCount=skus.filter(s=>s.isNew).length;
+  document.getElementById('skuListCount').textContent=`סה"כ: ${skus.length} מקטים`+(newCount?` · 🆕 ${newCount} חדשים לבדיקה`:'');
   updateSkuBulkBar();
   const selAll=document.getElementById('skuSelectAll');
   if(selAll) selAll.checked=skus.length>0 && skus.every(s=>skuBulkSelected.has(s.id));
@@ -1892,6 +1896,11 @@ async function loadSkuList(){
     const cur=getSelectedResps();
     box.innerHTML=allResps.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--border1)"><input type="checkbox" class="resp-cb" value="${r}" ${cur.includes(r)?'checked':''} onchange="onRespChange()"/> ${r}</label>`).join('');
   }
+}
+
+async function markSkuReviewed(id){
+  try{ await apiFetch('/api/skus/'+id,{method:'PATCH',body:JSON.stringify({})}); showToast('סומן כנבדק'); loadSkuList(); }
+  catch(e){ showToast(e.message); }
 }
 
 function openEditSku(id){
