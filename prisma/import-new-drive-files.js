@@ -15,7 +15,7 @@ const ROOT = 'G:\\האחסון שלי\\אישורי כשרות מהרבנות';
 const APPLY = process.argv.includes('--apply');
 
 // root files: Rabbinate attachments saved automatically by the Apps Script
-const SKIP_PATTERNS = [/police\.gov\.il/i, /ברכת שנה טובה/, /\.gsheet$/i];
+const SKIP_PATTERNS = [/^\/?image\d+\./i, /^Name$/,/police\.gov\.il/i, /ברכת שנה טובה/, /\.gsheet$/i];
 const UPLOADABLE = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.jpg', '.jpeg', '.png', '.txt']);
 
 function mimeFor(ext) {
@@ -37,6 +37,7 @@ async function login() {
 
 // folders to scan, with the default doctype/hidden for files that land there
 const SOURCES = [
+  { dir: 'תעודות ודוחות גופי כשרות/קבצים נכנסים לעיבוד (זמני)', recursive: false, doctype: 'בד״ץ (טרם מסווג)', hidden: true },
   { dir: '', recursive: false, doctype: 'בד״ץ (טרם מסווג)', hidden: true },
 ];
 
@@ -57,6 +58,7 @@ async function main() {
   const headers = { Authorization: `Bearer ${token}` };
   const docs = await (await fetch(`${BASE_URL}/api/docs`, { headers })).json();
   const known = new Set(docs.map(d => (d.name || '').replace(/[\u200e\u200f\u2066-\u2069]/g, '').trim()));
+  const knownSizes = new Set(docs.map(d => d.size_bytes).filter(Boolean)); // names differ by stray spaces/marks; exact byte size is a strong duplicate signal
   console.log('documents already in app:', docs.length);
 
   const todo = [];
@@ -64,10 +66,11 @@ async function main() {
     const dir = path.join(ROOT, src.dir);
     for (const f of listFiles(dir, src.recursive)) {
       const ext = path.extname(f.name).toLowerCase();
-      const title = f.name.replace(/\.[^.]+$/, '');
+      const title = f.name.replace(/^\//, '').replace(/\.[^.]+$/, '');
       if (!UPLOADABLE.has(ext)) { console.log('  skip (type):', f.name); continue; }
       if (SKIP_PATTERNS.some(re => re.test(f.name))) { console.log('  skip (unrelated):', f.name); continue; }
       if (known.has(title)) continue;
+      if (knownSizes.has(f.size)) { console.log('  skip (same size as existing doc):', f.name); continue; }
       if (f.size > 50 * 1024 * 1024) { console.log('  skip (>50MB):', f.name); continue; }
       todo.push({ ...f, ext, title, doctype: src.doctype, hidden: src.hidden });
     }
@@ -81,7 +84,7 @@ async function main() {
   for (const f of todo) {
     try {
       const fd = new FormData();
-      fd.append('file', new Blob([fs.readFileSync(f.full)], { type: mimeFor(f.ext) }), f.name);
+      fd.append('file', new Blob([fs.readFileSync(f.full)], { type: mimeFor(f.ext) }), f.name.replace(/^\//, ''));
       fd.append('name', f.title);
       fd.append('doctype', f.doctype);
       fd.append('hidden', String(f.hidden));
