@@ -503,8 +503,95 @@ event history (from the Phase 2 migration) and confirmed every field the
 UI reads is actually present with the expected shape. Existing 48/48
 regression suite still passes unchanged (no backend touched this pass).
 
+## Display-name rename (done, between R4 and R5)
+App display name changed to "ניהול כשרות – אחים כהן" everywhere a user
+sees it: `<title>`, `apple-mobile-web-app-title` meta, header/logo text,
+hero `<h1>`, and `manifest.json`'s `name` (`short_name` was already
+"ניהול כשרות"). Repo/folders/URLs/`package.json` name/DB/env vars
+untouched. Verified byte-level (en dash + Hebrew code points only, no
+stray characters) and live via HTTP.
+
+## Review-first email rule (done, added before R5 -- schema + API)
+New rule, applies to all future sending (R5, R12, and the separate
+doc-requests feature in `docrepo-doc-requests-spec.md`): **the app never
+emails a kashrut body directly.** Backed up first
+(`backups/2026-11-03T13-30-38-147Z/`).
+- Schema: `RawMaterialApprovalStatus` gained `SENT_FOR_REVIEW` (additive,
+  no warning).
+- `POST /api/raw-materials/:id/send`: when `via=EMAIL`, the real email
+  (unless `recordOnly`) now goes to `REVIEW_EMAIL` (env, default
+  `a0527613684@gmail.com`) instead of the body's contact, wrapped with
+  subject `[לבדיקה והעברה] → <body> / <contact> <email> – <original
+  subject>` and a header block naming the intended recipient + attachment
+  list, followed by the original ready-to-forward message. Resulting
+  status is `SENT_FOR_REVIEW` with `sentAt` left **unset** (it isn't
+  actually sent to the body yet). `WHATSAPP` is completely unchanged
+  (still client-side, still `recordOnly=true`, still goes straight to
+  `SENT_PENDING`) -- no review step for it.
+- New `POST /api/approvals/:id/confirm-forward` (optional `{sentAt}`,
+  defaults to now): the user's "I checked the email and forwarded it
+  myself" action. Only valid from `SENT_FOR_REVIEW`; sets `SENT_PENDING`
+  + `sentAt` (editable) + a `SENT` event. Rejects (400) if the approval
+  isn't currently `SENT_FOR_REVIEW`.
+- Regression: 5 new checks (review-send status/sentAt, matrix shows
+  exactly 1 `SENT_FOR_REVIEW`, confirm-forward with a custom `sentAt`,
+  its event, and double-confirm rejected). One real bug this test suite
+  caught before it ever reached the frontend: a contact-required check
+  I'd placed outside the `sendRealEmail` guard broke the old
+  `recordOnly`+no-contact test path with cascading downstream failures
+  (`approvalId` ending up `undefined` in later calls) -- moved back
+  inside the guard, matching original behavior. **52/52 passing.**
+
+## Side export (ad hoc, read-only, unrelated to the registry)
+`prisma/export-unlinked-docs.js` → `exports/unlinked-docs.csv` (gitignored,
+UTF-8 with BOM): every `Document` with zero `SkuLink`s, 917 rows as of
+2026-11-03. `originalFileName` is the R2 storage key's basename (the
+literal original upload filename was never persisted anywhere); `notes`
+maps to `Document.description` (no separate notes column exists).
+
+## R5 — Send modal (done)
+Appended to `public/raw-materials.js`. Backend already supported
+everything needed (multi-body/multi-track send, the review-first rule
+above) -- this is frontend only.
+- Opened per-row from the card's "שלח" button (preselects that row's
+  body+track) or "שלח השלמה" on a `NEEDS_INFO` row (same modal,
+  `followUp=true`) -- both now real, no longer stubs. "עדכן תשובה" is
+  still a stub (that's R6).
+- **Multi-select bodies** (active bodies, Passover-handling first by
+  `sortOrder`), **track checkboxes** (ימות השנה / פסח, both = "שניהם"),
+  **contact picker per selected body** (dropdown filtered to contacts
+  with `kashrutBodyId` matching + the right channel field, defaulting to
+  the body's `defaultContactId` when set) with a "+ חדש" inline
+  add-contact action (`POST /api/contacts` with `kashrutBodyId` set).
+- **Documents**: checkboxes over the card's own documents; the `LABEL`
+  role doc(s) and the relevant origin certificate
+  (`originCertDocId`/`originPassoverCertDocId`, whichever track(s) are
+  selected) are pre-checked.
+- **Message**: Hebrew template that regenerates per selected track(s)
+  (and prepends a follow-up line when `followUp`) -- but only while the
+  user hasn't touched it. Caught and fixed a real bug here: every toggle
+  (body/track/channel) re-renders the whole modal body, which would have
+  silently discarded an in-progress message edit each time; now a dirty
+  flag preserves the textarea's current value across re-renders once the
+  user has typed in it.
+- **Email**: calls `/send` with `via=EMAIL` (no `recordOnly` -- the
+  server's review-first wrapping handles the rest); toast explains the
+  email went to the user's own address first, not the body.
+- **WhatsApp**: unchanged approach, reused from the legacy screen --
+  fetches the selected documents as blobs, tries `navigator.share`, falls
+  back to downloading the files + opening a `wa.me` text-only link; asks
+  "נשלח?" per body (since each body has its own phone number, bodies are
+  processed one at a time for this channel), then records via `/send`
+  with `recordOnly=true`.
+- Card's approval rows gained a real **"✔ הועבר לגוף"** button on
+  `SENT_FOR_REVIEW` rows, calling `confirm-forward` (prompts for an
+  optional custom date).
+
+Verified: existing 52/52 regression suite still passes (no backend
+changed in this pass); checked live contact/kashrut-body data shapes
+against what the modal reads.
+
 ### Next
-R5 (send modal) → R6 (reply modal) → R10 (Excel export) → R11 (Excel
-import) → R12 (bulk send) → R7 (add-material flow) → R8 (SKU tab) → R9
-(contacts/bodies settings), stopping after each with a browser-checkable
-summary.
+R6 (reply modal) → R10 (Excel export) → R11 (Excel import) → R12 (bulk
+send) → R7 (add-material flow) → R8 (SKU tab) → R9 (contacts/bodies
+settings), stopping after each with a browser-checkable summary.

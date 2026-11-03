@@ -67,6 +67,7 @@ enum RawMaterialApprovalStatus {
   CONDITIONAL       // valid only for track=YEAR_ROUND, enforced in the API
   NEEDS_INFO        // added 3.11.2026 (two-track revision)
   APPROVED_KITNIYOT // valid only for track=PASSOVER, enforced in the API; added 3.11.2026
+  SENT_FOR_REVIEW   // added 3.11.2026: email sent to REVIEW_EMAIL, not the body yet -- "✔ הועבר לגוף" moves this to SENT_PENDING
 }
 
 // Which season an approval row is for -- added 3.11.2026 (two-track revision).

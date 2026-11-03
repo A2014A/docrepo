@@ -112,6 +112,15 @@ Same rules as before:
     - "היסטוריה".
 - **Linked SKUs:** add or remove.
 
+## Rule for all sending (added 3.11): emails go to the user first
+**Never email a kashrut body directly.** Send to the user's own address, `a0527613684@gmail.com` (env `REVIEW_EMAIL`).
+- **Subject:** `[לבדיקה והעברה] → <body> / <contact> <email> – <subject>`.
+- **Body:** a header block naming the intended recipient and listing the attachments, then the ready-to-forward message, with all attachments.
+- **Approval rows:** add status `SENT_FOR_REVIEW` ("נשלח אליך לבדיקה", light orange).
+- **Forwarding:** the user forwards the email himself, then clicks **"✔ הועבר לגוף"**. That sets `SENT_PENDING`, sentAt (editable), and writes a SENT event.
+- **Bulk send (R12):** one review email per body.
+- **WhatsApp** is unchanged.
+
 ## R5 – Send modal (was 4.3)
 - **Multi-select bodies** (checkboxes, active bodies, Passover bodies first).
 - **Track choice:** ימות השנה / פסח / שניהם.

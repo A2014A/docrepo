@@ -146,8 +146,20 @@ async function snapshot() {
   const sendEmail = await api('POST', `/api/raw-materials/${id}/send`, {
     kashrutBodyId: bodyLandau.id, docIds: [anyDoc.id], via: 'EMAIL', recordOnly: true, message: 'TEST-בדיקה אוטומטית',
   });
-  check('POST send (old single-body shape) EMAIL recordOnly=true records SENT_PENDING/YEAR_ROUND', sendEmail.status === 200 && sendEmail.body.status === 'SENT_PENDING' && sendEmail.body.sentVia === 'EMAIL' && sendEmail.body.track === 'YEAR_ROUND', sendEmail.body);
+  check('POST send EMAIL (review-first rule) records SENT_FOR_REVIEW, sentAt unset -- never SENT_PENDING directly', sendEmail.status === 200 && sendEmail.body.status === 'SENT_FOR_REVIEW' && sendEmail.body.sentAt === null && sendEmail.body.sentVia === 'EMAIL' && sendEmail.body.track === 'YEAR_ROUND', sendEmail.body);
   const approvalId = sendEmail.body && sendEmail.body.id;
+
+  const matrixAfterReviewSend = await api('GET', `/api/raw-materials/${id}/approvals`);
+  check('exactly 1 SENT_FOR_REVIEW row right after the email send', matrixAfterReviewSend.body.filter(a => a.status === 'SENT_FOR_REVIEW').length === 1, matrixAfterReviewSend.body.map(a => [a.kashrutBodyName, a.status]));
+
+  // confirm-forward: the user checked the review email and forwarded it himself
+  const customSentAt = '2026-01-15T10:00:00.000Z';
+  const confirmForward = await api('POST', `/api/approvals/${approvalId}/confirm-forward`, { sentAt: customSentAt });
+  check('POST confirm-forward moves SENT_FOR_REVIEW -> SENT_PENDING with the given sentAt (editable)', confirmForward.status === 200 && confirmForward.body.status === 'SENT_PENDING' && new Date(confirmForward.body.sentAt).getTime() === new Date(customSentAt).getTime(), confirmForward.body);
+  const confirmForwardEvents = await prisma.rawMaterialApprovalEvent.count({ where: { approvalId, type: 'SENT', toStatus: 'SENT_PENDING' } });
+  check('confirm-forward wrote its own SENT event', confirmForwardEvents >= 1, confirmForwardEvents);
+  const confirmForwardAgain = await api('POST', `/api/approvals/${approvalId}/confirm-forward`, {});
+  check('confirm-forward again (already SENT_PENDING, not SENT_FOR_REVIEW) is rejected (400)', confirmForwardAgain.status === 400, confirmForwardAgain);
 
   const sendWhatsapp = await api('POST', `/api/raw-materials/${id}/send`, {
     kashrutBodyId: bodySecond.id, docIds: [anyDoc.id], via: 'WHATSAPP', recordOnly: true,

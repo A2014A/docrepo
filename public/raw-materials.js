@@ -747,9 +747,10 @@ function rmCardApprovalsSectionHtml(track) {
 function rmCardApprovalRowHtml(a, track) {
   const replyFile = a.replyDocId ? `<a href="/api/docs/${a.replyDocId}/download?inline=1" target="_blank">📄</a>` : '—';
   const buttons = rmIsReadOnly() ? '' : `
-    <button class="btn btn-outline rmc-btn-sm" onclick="rmCardStub('שליחה')">שלח</button>
+    <button class="btn btn-outline rmc-btn-sm" onclick="rmOpenSendModal(${a.kashrutBodyId},'${a.track}',false)">שלח</button>
     ${a.id ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardStub('עדכון תשובה')">עדכן תשובה</button>` : ''}
-    ${a.status === 'NEEDS_INFO' ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardStub('שליחת השלמה')">שלח השלמה</button>` : ''}
+    ${a.status === 'NEEDS_INFO' ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmOpenSendModal(${a.kashrutBodyId},'${a.track}',true)">שלח השלמה</button>` : ''}
+    ${a.status === 'SENT_FOR_REVIEW' ? `<button class="btn btn-accent rmc-btn-sm" onclick="rmCardConfirmForward(${a.id})">✔ הועבר לגוף</button>` : ''}
     ${a.id ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardOpenHistory(${a.id})">היסטוריה</button>` : ''}`;
   return `
     <tr>
@@ -837,5 +838,274 @@ async function rmCardOnSkuPicked(chosen) {
     catch (e) { showToast(e.message); }
   }
   showToast('מק"טים נוספו');
+  await rmLoadCard();
+}
+
+/* ── confirm-forward: "✔ הועבר לגוף" on a SENT_FOR_REVIEW row (R1 rule:
+ * email always goes to the user first; this is the step where he confirms
+ * he actually forwarded it to the kashrut body). sentAt is editable --
+ * asked via a simple prompt rather than a full date-picker widget. ── */
+async function rmCardConfirmForward(approvalId) {
+  if (!confirm('לאשר שהמייל הועבר בפועל לגוף הכשרות?')) return;
+  const dateStr = prompt('תאריך השליחה בפועל (YYYY-MM-DD, השאר ריק = היום):', '');
+  const body = {};
+  if (dateStr && dateStr.trim()) body.sentAt = dateStr.trim();
+  try {
+    await apiFetch('/api/approvals/' + approvalId + '/confirm-forward', { method: 'POST', body: JSON.stringify(body) });
+    showToast('סומן כנשלח לגוף הכשרות');
+    await rmLoadCard();
+  } catch (e) { showToast(e.message); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Send modal -- Phase 4 R5 (docrepo-phase4-v2-tracks.md), with the
+ * review-first email rule (same file, "Rule for all sending" section):
+ * EMAIL never reaches the kashrut body directly -- the server always
+ * redirects to REVIEW_EMAIL and records SENT_FOR_REVIEW. This modal just
+ * calls the existing /send endpoint; the user confirms the real forward
+ * afterward via the "✔ הועבר לגוף" button added above.
+ * WhatsApp is unchanged: client-side share/wa.me (same approach as the
+ * legacy "ניהול אישור חמרי גלם" screen), then recordOnly=true.
+ * ══════════════════════════════════════════════════════════════════════ */
+
+const RM_SEND = {
+  bodyIds: new Set(), tracks: new Set(), docIds: new Set(),
+  contactByBody: {}, channel: 'EMAIL', followUp: false, contacts: [],
+};
+let RM_SEND_MESSAGE_DIRTY = false;
+
+function rmSendInjectModal() {
+  if (document.getElementById('rmSendModal')) return;
+  const div = document.createElement('div');
+  div.className = 'modal-bg';
+  div.id = 'rmSendModal';
+  div.innerHTML = `
+    <div class="modal" style="max-width:560px">
+      <div class="modal-header">
+        <div class="modal-title">שליחה לאישור</div>
+        <button class="modal-close" onclick="document.getElementById('rmSendModal').classList.remove('open')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="rmSendBody" style="max-height:70vh;overflow-y:auto"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('rmSendModal').classList.remove('open')">ביטול</button>
+        <button class="btn btn-accent" id="rmSendSubmitBtn" onclick="rmSendSubmit()">שלח</button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+async function rmOpenSendModal(preselectBodyId, preselectTrack, followUp) {
+  rmSendInjectModal();
+  RM_SEND.bodyIds = new Set(preselectBodyId ? [preselectBodyId] : []);
+  RM_SEND.tracks = new Set(preselectTrack ? [preselectTrack] : ['YEAR_ROUND']);
+  RM_SEND.docIds = new Set();
+  RM_SEND.contactByBody = {};
+  RM_SEND.channel = 'EMAIL';
+  RM_SEND.followUp = !!followUp;
+  RM_SEND_MESSAGE_DIRTY = false;
+
+  // pre-check the label + the relevant origin certificate
+  const docs = RM_CARD_DATA.documents || [];
+  docs.filter(d => d.docRole === 'LABEL').forEach(d => RM_SEND.docIds.add(d.docId));
+  if (RM_SEND.tracks.has('YEAR_ROUND') && RM_CARD_DATA.originCertDocId) RM_SEND.docIds.add(RM_CARD_DATA.originCertDocId);
+  if (RM_SEND.tracks.has('PASSOVER') && RM_CARD_DATA.originPassoverCertDocId) RM_SEND.docIds.add(RM_CARD_DATA.originPassoverCertDocId);
+
+  try { RM_SEND.contacts = await apiFetch('/api/contacts'); } catch (e) { RM_SEND.contacts = []; }
+  if (preselectBodyId) rmSendAutoPickContact(preselectBodyId);
+
+  document.getElementById('rmSendModal').classList.add('open');
+  rmSendRender();
+}
+
+function rmSendAutoPickContact(bodyId) {
+  const body = RM_STATE.bodyById.get(bodyId);
+  const channelField = RM_SEND.channel === 'EMAIL' ? 'email' : 'phone';
+  let contact = null;
+  if (body && body.defaultContactId) contact = RM_SEND.contacts.find(c => c.id === body.defaultContactId);
+  if (!contact) contact = RM_SEND.contacts.find(c => c.kashrutBodyId === bodyId && c[channelField]);
+  if (contact) RM_SEND.contactByBody[bodyId] = contact.id;
+}
+
+function rmSendMessageTemplate() {
+  const tracks = [...RM_SEND.tracks];
+  const tracksText = tracks.length === 2 ? 'לימות השנה ולפסח' : RM_TRACK_LABEL[tracks[0]] || '';
+  const followUpLine = RM_SEND.followUp ? 'בהמשך לבקשתכם לפרטים נוספים, ' : '';
+  return `שלום,\n\n${followUpLine}מצורפים מסמכים עבור חומר הגלם ${RM_CARD_DATA.name}, בנושא ${tracksText}.\n\nבברכה,\nאחים כהן`;
+}
+
+function rmSendToggleBody(bodyId, checked) {
+  if (checked) { RM_SEND.bodyIds.add(bodyId); rmSendAutoPickContact(bodyId); }
+  else RM_SEND.bodyIds.delete(bodyId);
+  rmSendRender();
+}
+function rmSendToggleTrack(track, checked) {
+  if (checked) RM_SEND.tracks.add(track); else RM_SEND.tracks.delete(track);
+  if (!RM_SEND.tracks.size) RM_SEND.tracks.add(track); // keep at least one
+  rmSendRender();
+}
+function rmSendToggleDoc(docId, checked) {
+  if (checked) RM_SEND.docIds.add(docId); else RM_SEND.docIds.delete(docId);
+}
+function rmSendSetChannel(channel) {
+  RM_SEND.channel = channel;
+  rmSendRender();
+}
+function rmSendPickContact(bodyId, contactId) {
+  RM_SEND.contactByBody[bodyId] = contactId ? parseInt(contactId) : null;
+}
+async function rmSendAddContact(bodyId) {
+  const name = prompt('שם איש הקשר:');
+  if (!name || !name.trim()) return;
+  const value = prompt(RM_SEND.channel === 'EMAIL' ? 'כתובת מייל:' : 'מספר טלפון:');
+  if (!value || !value.trim()) return;
+  const body = { name: name.trim(), kashrutBodyId: bodyId };
+  body[RM_SEND.channel === 'EMAIL' ? 'email' : 'phone'] = value.trim();
+  try {
+    const contact = await apiFetch('/api/contacts', { method: 'POST', body: JSON.stringify(body) });
+    RM_SEND.contacts.push(contact);
+    RM_SEND.contactByBody[bodyId] = contact.id;
+    showToast('איש הקשר נשמר');
+    rmSendRender();
+  } catch (e) { showToast(e.message); }
+}
+
+function rmSendRender() {
+  const channelField = RM_SEND.channel === 'EMAIL' ? 'email' : 'phone';
+  const bodies = RM_STATE.allBodies.filter(b => b.active).sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  const docs = RM_CARD_DATA.documents || [];
+  const el = document.getElementById('rmSendBody');
+  // every toggle (body/track/channel) re-renders this whole block -- if the
+  // user already edited the message, keep their text instead of
+  // regenerating the template and silently discarding it
+  const existingMsgEl = document.getElementById('rmSendMessage');
+  const messageValue = (RM_SEND_MESSAGE_DIRTY && existingMsgEl) ? existingMsgEl.value : rmSendMessageTemplate();
+  el.innerHTML = `
+    ${RM_SEND.followUp ? `<div class="alert" style="background:#ede9fe;color:#5b21b6;padding:8px 12px;border-radius:8px;margin-bottom:10px;font-size:.82rem">שליחת השלמת מידע לבקשה קיימת (NEEDS_INFO)</div>` : ''}
+    <div class="form-group">
+      <label class="form-label">מסלול</label>
+      <div style="display:flex;gap:10px">
+        <label style="font-size:.85rem"><input type="checkbox" ${RM_SEND.tracks.has('YEAR_ROUND') ? 'checked' : ''} onchange="rmSendToggleTrack('YEAR_ROUND',this.checked)"/> ימות השנה</label>
+        <label style="font-size:.85rem"><input type="checkbox" ${RM_SEND.tracks.has('PASSOVER') ? 'checked' : ''} onchange="rmSendToggleTrack('PASSOVER',this.checked)"/> פסח</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">ערוץ</label>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn ${RM_SEND.channel === 'EMAIL' ? 'btn-accent' : 'btn-outline'}" style="flex:1" onclick="rmSendSetChannel('EMAIL')">✉ מייל</button>
+        <button type="button" class="btn ${RM_SEND.channel === 'WHATSAPP' ? 'btn-accent' : 'btn-outline'}" style="flex:1" onclick="rmSendSetChannel('WHATSAPP')">💬 וואטסאפ</button>
+      </div>
+      ${RM_SEND.channel === 'EMAIL' ? `<p style="font-size:.74rem;color:var(--ink3);margin-top:4px">המייל יישלח אליך לבדיקה, לא ישירות לגוף הכשרות. תוכל לאשר העברה בפועל אחרי ששלחת אותו.</p>` : ''}
+    </div>
+    <div class="form-group">
+      <label class="form-label">גופי כשרות ואנשי קשר</label>
+      <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border2);border-radius:8px;padding:6px">
+        ${bodies.map(b => {
+          const checked = RM_SEND.bodyIds.has(b.id);
+          const contactOptions = RM_SEND.contacts.filter(c => c.kashrutBodyId === b.id && c[channelField]);
+          return `
+            <div style="padding:5px 4px;${checked ? '' : 'opacity:.6'}">
+              <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;cursor:pointer">
+                <input type="checkbox" ${checked ? 'checked' : ''} onchange="rmSendToggleBody(${b.id},this.checked)"/>
+                ${rmEscapeHtml(b.shortName || b.name)}
+              </label>
+              ${checked ? `
+                <div style="display:flex;gap:6px;margin:4px 0 0 22px">
+                  <select style="flex:1;font-size:.78rem" onchange="rmSendPickContact(${b.id}, this.value)">
+                    <option value="">— בחר איש קשר —</option>
+                    ${contactOptions.map(c => `<option value="${c.id}" ${RM_SEND.contactByBody[b.id] === c.id ? 'selected' : ''}>${rmEscapeHtml(c.name)} — ${rmEscapeHtml(c[channelField])}</option>`).join('')}
+                  </select>
+                  <button type="button" class="btn btn-outline" style="font-size:.72rem;padding:3px 7px" onclick="rmSendAddContact(${b.id})">+ חדש</button>
+                </div>` : ''}
+            </div>`;
+        }).join('')}
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">מסמכים לצירוף</label>
+      <div style="max-height:150px;overflow-y:auto;border:1px solid var(--border2);border-radius:8px;padding:6px">
+        ${docs.length ? docs.map(d => `
+          <label style="display:flex;align-items:center;gap:8px;padding:4px;font-size:.82rem;cursor:pointer">
+            <input type="checkbox" ${RM_SEND.docIds.has(d.docId) ? 'checked' : ''} onchange="rmSendToggleDoc(${d.docId},this.checked)"/>
+            ${rmEscapeHtml(d.title)} <span style="color:var(--ink3);font-size:.72rem">(${RM_DOC_ROLE_LABEL[d.docRole] || d.docRole})</span>
+          </label>`).join('') : '<div style="font-size:.8rem;color:var(--ink3);padding:4px">אין מסמכים לחומר גלם זה</div>'}
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">הודעה</label>
+      <textarea class="form-input" id="rmSendMessage" rows="5" style="resize:vertical" oninput="RM_SEND_MESSAGE_DIRTY=true">${rmEscapeHtml(messageValue)}</textarea>
+    </div>`;
+}
+
+async function rmSendSubmit() {
+  if (!RM_SEND.bodyIds.size) { showToast('נא לבחור גוף כשרות אחד לפחות'); return; }
+  if (!RM_SEND.docIds.size) { showToast('נא לבחור מסמך אחד לפחות'); return; }
+  const message = document.getElementById('rmSendMessage').value;
+  const tracks = [...RM_SEND.tracks];
+  const bodyIds = [...RM_SEND.bodyIds];
+  const btn = document.getElementById('rmSendSubmitBtn');
+  btn.disabled = true;
+
+  if (RM_SEND.channel === 'EMAIL') {
+    for (const bodyId of bodyIds) {
+      if (!RM_SEND.contactByBody[bodyId]) { showToast('נא לבחור איש קשר עם כתובת מייל לכל גוף שנבחר'); btn.disabled = false; return; }
+    }
+    try {
+      await apiFetch('/api/raw-materials/' + RM_CARD_ID + '/send', {
+        method: 'POST',
+        body: JSON.stringify({
+          kashrutBodyIds: bodyIds, tracks, contactIds: RM_SEND.contactByBody,
+          docIds: [...RM_SEND.docIds], message, via: 'EMAIL', followUp: RM_SEND.followUp,
+        }),
+      });
+      showToast('המייל נשלח אליך לבדיקה -- אחרי שתעביר אותו לגוף הכשרות, אשר זאת בכרטיס עם "✔ הועבר לגוף"');
+      document.getElementById('rmSendModal').classList.remove('open');
+      await rmLoadCard();
+    } catch (e) { showToast(e.message); }
+    btn.disabled = false;
+    return;
+  }
+
+  // WhatsApp: client-side share/wa.me per body (same approach as the
+  // legacy screen), one body at a time since each has its own phone number
+  for (const bodyId of bodyIds) {
+    const contactId = RM_SEND.contactByBody[bodyId];
+    const contact = contactId ? RM_SEND.contacts.find(c => c.id === contactId) : null;
+    const body = RM_STATE.bodyById.get(bodyId);
+    if (!contact || !contact.phone) { showToast(`נא לבחור איש קשר עם טלפון לגוף ${body ? body.name : bodyId}`); continue; }
+
+    try {
+      const fetchedFiles = await Promise.all([...RM_SEND.docIds].map(async (docId) => {
+        const res = await fetch(API + '/api/docs/' + docId + '/download', { headers: authHeaders() });
+        if (!res.ok) throw new Error('שגיאה בטעינת קובץ');
+        const blob = await res.blob();
+        const doc = (RM_CARD_DATA.documents || []).find(d => d.docId === docId);
+        return new File([blob], (doc ? doc.title : 'מסמך') + (doc && doc.ext ? '.' + doc.ext : ''), { type: blob.type || 'application/octet-stream' });
+      }));
+      if (navigator.canShare && navigator.canShare({ files: fetchedFiles })) {
+        try { await navigator.share({ files: fetchedFiles, text: message }); }
+        catch (shareErr) { if (shareErr.name !== 'AbortError') throw shareErr; }
+      } else {
+        fetchedFiles.forEach((file) => {
+          const url = URL.createObjectURL(file);
+          const a = document.createElement('a'); a.href = url; a.download = file.name; a.click();
+          URL.revokeObjectURL(url);
+        });
+        window.open('https://wa.me/?text=' + encodeURIComponent(message), '_blank');
+      }
+      if (!confirm(`נשלח בוואטסאפ לגוף ${body.name}?`)) continue;
+      await apiFetch('/api/raw-materials/' + RM_CARD_ID + '/send', {
+        method: 'POST',
+        body: JSON.stringify({
+          kashrutBodyIds: [bodyId], tracks, contactIds: { [bodyId]: contactId },
+          docIds: [...RM_SEND.docIds], message, via: 'WHATSAPP', recordOnly: true, followUp: RM_SEND.followUp,
+        }),
+      });
+    } catch (e) { showToast(e.message); }
+  }
+  showToast('נרשם בהצלחה');
+  document.getElementById('rmSendModal').classList.remove('open');
+  btn.disabled = false;
   await rmLoadCard();
 }

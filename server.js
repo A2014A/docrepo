@@ -810,7 +810,7 @@ const VALID_APPROVAL_SOURCE = ['PHONE', 'EMAIL', 'WHATSAPP', 'LETTER', 'PREVIOUS
 
 // status values valid for a given track (R1: CONDITIONAL only YEAR_ROUND,
 // APPROVED_KITNIYOT only PASSOVER; everything else applies to both)
-const APPROVAL_STATUS_COMMON = ['NOT_SENT', 'SENT_PENDING', 'APPROVED', 'REJECTED', 'NEEDS_INFO'];
+const APPROVAL_STATUS_COMMON = ['NOT_SENT', 'SENT_PENDING', 'APPROVED', 'REJECTED', 'NEEDS_INFO', 'SENT_FOR_REVIEW'];
 function isValidStatusForTrack(status, track) {
   if (APPROVAL_STATUS_COMMON.includes(status)) return true;
   if (status === 'CONDITIONAL') return track === 'YEAR_ROUND';
@@ -1063,13 +1063,20 @@ app.patch('/api/approvals/:id', requireAssistant, ah(async (req, res) => {
   res.json(regApprovalOut(updated));
 }));
 
-/* ── send: real email via the existing nodemailer setup, or record-only for
- * a WhatsApp send the client already carried out via share/wa.me. Two-track
- * revision: accepts multiple bodies and/or tracks in one call (one email
- * per body, mentioning which track(s) are being asked), while the old
- * single-body shape (kashrutBodyId + contactId) keeps working unchanged --
- * it just means "one body, YEAR_ROUND". ── */
+/* ── send: EMAIL never goes to the kashrut body directly (added 3.11.2026)
+ * -- it goes to REVIEW_EMAIL (the user's own address) wrapped with a
+ * "[לבדיקה והעברה]" subject and a header block naming the intended
+ * recipient + attachments, so the user can check it and forward it
+ * himself. That sets SENT_FOR_REVIEW, not SENT_PENDING -- sentAt stays
+ * unset until the user confirms via POST .../confirm-forward below.
+ * WHATSAPP is unchanged: still client-side (share/wa.me), still
+ * recordOnly=true, still sets SENT_PENDING directly, no review step.
+ * Two-track revision: accepts multiple bodies and/or tracks in one call
+ * (one review email per body), while the old single-body shape
+ * (kashrutBodyId + contactId) keeps working unchanged -- it just means
+ * "one body, YEAR_ROUND". ── */
 const TRACK_LABEL = { YEAR_ROUND: 'לימות השנה', PASSOVER: 'לפסח' };
+const REVIEW_EMAIL = process.env.REVIEW_EMAIL || 'a0527613684@gmail.com';
 app.post('/api/raw-materials/:id/send', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const rm = await prisma.rawMaterial.findUnique({ where: { id } });
@@ -1112,32 +1119,41 @@ app.post('/api/raw-materials/:id/send', requireAssistant, ah(async (req, res) =>
     const contact = contactId ? await prisma.contact.findUnique({ where: { id: parseInt(contactId) } }) : null;
 
     if (sendRealEmail) {
-      if (!contact || !contact.email) return res.status(400).json({ error: `נא לבחור איש קשר עם כתובת מייל לגוף ${body.name}` });
+      if (!contact?.email) return res.status(400).json({ error: `נא לבחור איש קשר עם כתובת מייל לגוף ${body.name}` });
       const attachments = await Promise.all(docs.map(async (d) => {
         const { stream, contentType } = await getObjectStream(d.fileUrl);
         const ext = d.docExt ? '.' + d.docExt : '';
         return { filename: (d.title || 'מסמך') + ext, content: stream, contentType };
       }));
       const defaultBody = `שלום,\n\nמצורפים מסמכים עבור חומר הגלם ${rm.name}, בנושא ${tracksText}.\n\nבברכה,\nאחים כהן`;
+      const innerSubject = `אישור כשרות (${tracksText}) — ${rm.name}`;
+      const headerBlock = `מיועד ל: ${contact.name} <${contact.email}> (${body.name})\n` +
+        `קבצים מצורפים: ${attachments.map(a => a.filename).join(', ')}\n\n` +
+        `--- ההודעה המוכנה להעברה לגוף הכשרות ---\n\n`;
       await mailer.sendMail({
-        from: process.env.EMAIL_FROM, to: contact.email,
-        subject: `אישור כשרות (${tracksText}) — ${rm.name}`,
-        text: message || defaultBody,
+        from: process.env.EMAIL_FROM, to: REVIEW_EMAIL,
+        subject: `[לבדיקה והעברה] → ${body.name} / ${contact.name} ${contact.email} – ${innerSubject}`,
+        text: headerBlock + (message || defaultBody),
         attachments,
       });
     }
 
+    // EMAIL -> SENT_FOR_REVIEW (sentAt stays unset until confirm-forward);
+    // WHATSAPP is unchanged -> SENT_PENDING directly, sentAt = now
+    const newStatus = via === 'EMAIL' ? 'SENT_FOR_REVIEW' : 'SENT_PENDING';
+    const newSentAt = via === 'EMAIL' ? null : new Date();
+
     for (const track of tracks) {
       const approval = await prisma.rawMaterialApproval.upsert({
         where: { rawMaterialId_kashrutBodyId_track: { rawMaterialId: id, kashrutBodyId: body.id, track } },
-        create: { rawMaterialId: id, kashrutBodyId: body.id, track, contactId: contact ? contact.id : null, status: 'SENT_PENDING', sentAt: new Date(), sentVia: via, sentDocIds: ids },
-        update: { contactId: contact ? contact.id : null, status: 'SENT_PENDING', sentAt: new Date(), sentVia: via, sentDocIds: ids },
+        create: { rawMaterialId: id, kashrutBodyId: body.id, track, contactId: contact ? contact.id : null, status: newStatus, sentAt: newSentAt, sentVia: via, sentDocIds: ids },
+        update: { contactId: contact ? contact.id : null, status: newStatus, sentAt: newSentAt, sentVia: via, sentDocIds: ids },
         include: { kashrutBody: true, contact: true },
       });
       await prisma.rawMaterialApprovalEvent.create({
         data: {
-          approvalId: approval.id, type: 'SENT', toStatus: 'SENT_PENDING',
-          payload: { via, docIds: ids, recordOnly: !!recordOnly, contactId: contact ? contact.id : null, followUp: !!followUp },
+          approvalId: approval.id, type: 'SENT', toStatus: newStatus,
+          payload: { via, docIds: ids, recordOnly: !!recordOnly, contactId: contact ? contact.id : null, followUp: !!followUp, reviewEmail: via === 'EMAIL' ? REVIEW_EMAIL : undefined },
           byUserId: req.user.id || null,
         },
       });
@@ -1146,6 +1162,32 @@ app.post('/api/raw-materials/:id/send', requireAssistant, ah(async (req, res) =>
   }
 
   res.json(bodyIds.length === 1 && tracks.length === 1 ? results[0] : results);
+}));
+
+/* ── confirm-forward: the user checked the review email and forwarded it
+ * himself to the kashrut body -- moves SENT_FOR_REVIEW to SENT_PENDING
+ * with an editable sentAt (defaults to now). Added 3.11.2026 alongside
+ * the review-first email rule. ── */
+app.post('/api/approvals/:id/confirm-forward', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const approval = await prisma.rawMaterialApproval.findUnique({ where: { id } });
+  if (!approval) return res.status(404).json({ error: 'רשומת אישור לא נמצאה' });
+  if (approval.status !== 'SENT_FOR_REVIEW')
+    return res.status(400).json({ error: 'ניתן לאשר העברה רק מתוך סטטוס "נשלח אליך לבדיקה"' });
+  const { sentAt } = req.body;
+
+  const updated = await prisma.rawMaterialApproval.update({
+    where: { id },
+    data: { status: 'SENT_PENDING', sentAt: sentAt ? new Date(sentAt) : new Date(), updatedById: req.user.id || null },
+    include: { kashrutBody: true, contact: true },
+  });
+  await prisma.rawMaterialApprovalEvent.create({
+    data: {
+      approvalId: id, type: 'SENT', fromStatus: 'SENT_FOR_REVIEW', toStatus: 'SENT_PENDING',
+      payload: { confirmedForward: true }, byUserId: req.user.id || null,
+    },
+  });
+  res.json(regApprovalOut(updated));
 }));
 
 /* ── reply: upload the reply as a Document, close out the approval. Two-

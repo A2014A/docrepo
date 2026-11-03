@@ -8,3 +8,6 @@ uploads/
 
 # local pre-migration DB backups -- contains full table data, not for git
 backups/
+
+# ad-hoc local exports (CSV/reports) -- generated output, not source
+exports/
