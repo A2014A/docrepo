@@ -761,30 +761,46 @@ function regDocOut(rd) {
   };
 }
 
+// Two-track revision (3.11.2026, docrepo-phase4-v2-tracks.md): status is now
+// per (rawMaterial, kashrutBody, track). passoverStatus/passoverYear/
+// passoverNote are deprecated -- no longer read or written here.
 function regApprovalOut(a) {
   return {
     id: a.id, rawMaterialId: a.rawMaterialId,
     kashrutBodyId: a.kashrutBodyId, kashrutBodyName: a.kashrutBody ? a.kashrutBody.name : null,
     handlesPassover: a.kashrutBody ? a.kashrutBody.handlesPassover : false,
+    track: a.track, seasonYear: a.seasonYear || '',
     contactId: a.contactId, contactName: a.contact ? a.contact.name : null,
     status: a.status, kashrutLevel: a.kashrutLevel || '',
-    passoverStatus: a.passoverStatus, passoverYear: a.passoverYear || '', passoverNote: a.passoverNote || '',
     sentAt: a.sentAt, sentVia: a.sentVia, sentDocIds: a.sentDocIds || [],
     replyAt: a.replyAt, replyDocId: a.replyDocId,
     conditionText: a.conditionText || '', validUntil: a.validUntil,
+    approvalSource: a.approvalSource, approvalSourceDetail: a.approvalSourceDetail || '',
     notes: a.notes || '', createdAt: a.createdAt, updatedAt: a.updatedAt,
   };
 }
 
-function regNotSentPlaceholder(rawMaterialId, body) {
+function regNotSentPlaceholder(rawMaterialId, body, track) {
   return {
     id: null, rawMaterialId, kashrutBodyId: body.id, kashrutBodyName: body.name,
-    handlesPassover: body.handlesPassover,
+    handlesPassover: body.handlesPassover, track, seasonYear: '',
     contactId: null, contactName: null, status: 'NOT_SENT', kashrutLevel: '',
-    passoverStatus: 'NOT_ASKED', passoverYear: '', passoverNote: '',
     sentAt: null, sentVia: null, sentDocIds: [], replyAt: null, replyDocId: null,
-    conditionText: '', validUntil: null, notes: '', createdAt: null, updatedAt: null,
+    conditionText: '', validUntil: null, approvalSource: null, approvalSourceDetail: '',
+    notes: '', createdAt: null, updatedAt: null,
   };
+}
+
+const VALID_APPROVAL_SOURCE = ['PHONE', 'EMAIL', 'WHATSAPP', 'LETTER', 'PREVIOUS_YEAR', 'BODY_LIST', 'OTHER'];
+
+// status values valid for a given track (R1: CONDITIONAL only YEAR_ROUND,
+// APPROVED_KITNIYOT only PASSOVER; everything else applies to both)
+const APPROVAL_STATUS_COMMON = ['NOT_SENT', 'SENT_PENDING', 'APPROVED', 'REJECTED', 'NEEDS_INFO'];
+function isValidStatusForTrack(status, track) {
+  if (APPROVAL_STATUS_COMMON.includes(status)) return true;
+  if (status === 'CONDITIONAL') return track === 'YEAR_ROUND';
+  if (status === 'APPROVED_KITNIYOT') return track === 'PASSOVER';
+  return false;
 }
 
 function regMaterialOut(rm, extra) {
@@ -792,6 +808,11 @@ function regMaterialOut(rm, extra) {
   return {
     id: rm.id, name: rm.name, supplier: rm.supplier || '', manufacturer: rm.manufacturer || '',
     defaultDocId: rm.defaultDocId, notes: rm.notes || '',
+    originKashrutText: rm.originKashrutText || '',
+    originKashrutBodyId: rm.originKashrutBodyId,
+    originKashrutBodyName: rm.originKashrutBody ? rm.originKashrutBody.name : null,
+    originCertDocId: rm.originCertDocId, originCertValidUntil: rm.originCertValidUntil,
+    originHasCert: rm.originHasCert,
     createdAt: rm.createdAt, updatedAt: rm.updatedAt,
     documents: documents.map(regDocOut),
     approvals: approvals.map(regApprovalOut),
@@ -803,6 +824,7 @@ const REG_INCLUDE = {
   documents: { include: { document: true } },
   approvals: { include: { kashrutBody: true, contact: true } },
   skus: { include: { sku: true } },
+  originKashrutBody: true,
 };
 
 /* ── list / CRUD ── */
@@ -897,7 +919,37 @@ app.post('/api/raw-material-registry/:id/documents', requireAssistant, upload.si
   res.status(201).json(regDocOut(rmd));
 }));
 
+/* ── get-or-create an approval row for (kashrutBodyId, track) without
+ * sending anything. Added 3.11.2026: a status can now be set directly from
+ * NOT_SENT (e.g. a phone call that was never preceded by a /send) -- but
+ * NOT_SENT only ever existed as a synthesized matrix placeholder (id=null)
+ * until now, since /send's upsert always created rows as SENT_PENDING.
+ * This gives the caller a real id to PATCH. ── */
+app.post('/api/raw-material-registry/:id/approvals', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const rm = await prisma.rawMaterial.findUnique({ where: { id } });
+  if (!rm) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
+  const { kashrutBodyId } = req.body;
+  if (!kashrutBodyId) return res.status(400).json({ error: 'נא לבחור גוף כשרות' });
+  const track = req.body.track || 'YEAR_ROUND';
+  if (!['YEAR_ROUND', 'PASSOVER'].includes(track)) return res.status(400).json({ error: 'מסלול לא תקין' });
+  const body = await prisma.kashrutBody.findUnique({ where: { id: parseInt(kashrutBodyId) } });
+  if (!body) return res.status(404).json({ error: 'גוף כשרות לא נמצא' });
+  const approval = await prisma.rawMaterialApproval.upsert({
+    where: { rawMaterialId_kashrutBodyId_track: { rawMaterialId: id, kashrutBodyId: body.id, track } },
+    create: { rawMaterialId: id, kashrutBodyId: body.id, track },
+    update: {},
+    include: { kashrutBody: true, contact: true },
+  });
+  res.status(201).json(regApprovalOut(approval));
+}));
+
 /* ── approvals matrix: every active kashrut body, NOT_SENT ones included ── */
+// Two-track revision: one row per active body for YEAR_ROUND, plus one row
+// per handlesPassover body for PASSOVER -- including NOT_SENT placeholders
+// for either. Also surfaces any PASSOVER row that exists for a body that
+// isn't (or is no longer) handlesPassover/active, so real data is never
+// hidden even if a body's flags changed after the row was created.
 app.get('/api/raw-materials/:id/approvals', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const rm = await prisma.rawMaterial.findUnique({ where: { id } });
@@ -906,11 +958,22 @@ app.get('/api/raw-materials/:id/approvals', requireAssistant, ah(async (req, res
     prisma.kashrutBody.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
     prisma.rawMaterialApproval.findMany({ where: { rawMaterialId: id }, include: { kashrutBody: true, contact: true } }),
   ]);
-  const byBody = new Map(approvals.map(a => [a.kashrutBodyId, a]));
-  res.json(bodies.map(b => {
-    const a = byBody.get(b.id);
-    return a ? regApprovalOut(a) : regNotSentPlaceholder(id, b);
-  }));
+  const byKey = new Map(approvals.map(a => [`${a.kashrutBodyId}|${a.track}`, a]));
+
+  const rows = [];
+  for (const b of bodies) {
+    const yr = byKey.get(`${b.id}|YEAR_ROUND`);
+    rows.push(yr ? regApprovalOut(yr) : regNotSentPlaceholder(id, b, 'YEAR_ROUND'));
+    if (b.handlesPassover) {
+      const ps = byKey.get(`${b.id}|PASSOVER`);
+      rows.push(ps ? regApprovalOut(ps) : regNotSentPlaceholder(id, b, 'PASSOVER'));
+    }
+  }
+  const shownIds = new Set(rows.map(r => r.id).filter(idv => idv != null));
+  for (const a of approvals) {
+    if (a.track === 'PASSOVER' && !shownIds.has(a.id)) rows.push(regApprovalOut(a));
+  }
+  res.json(rows);
 }));
 
 /* ── change an approval's status/level/condition/notes/validUntil ── */
@@ -918,11 +981,17 @@ app.patch('/api/approvals/:id', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const approval = await prisma.rawMaterialApproval.findUnique({ where: { id } });
   if (!approval) return res.status(404).json({ error: 'רשומת אישור לא נמצאה (חומר גלם שלא נשלח עדיין אין לו רשומה עד שליחה ראשונה)' });
-  const { status, kashrutLevel, conditionText, notes, validUntil, passoverStatus, passoverYear, passoverNote } = req.body;
-  const VALID_STATUS = ['NOT_SENT', 'SENT_PENDING', 'APPROVED', 'REJECTED', 'CONDITIONAL'];
-  if (status !== undefined && !VALID_STATUS.includes(status)) return res.status(400).json({ error: 'סטטוס לא תקין' });
-  const VALID_PASSOVER = ['NOT_ASKED', 'PASSOVER', 'PASSOVER_KITNIYOT', 'NOT_PASSOVER'];
-  if (passoverStatus !== undefined && !VALID_PASSOVER.includes(passoverStatus)) return res.status(400).json({ error: 'סטטוס פסח לא תקין' });
+  const { status, kashrutLevel, conditionText, notes, validUntil, seasonYear, approvalSource, approvalSourceDetail } = req.body;
+  if (status !== undefined && !isValidStatusForTrack(status, approval.track))
+    return res.status(400).json({ error: approval.track === 'YEAR_ROUND' ? 'סטטוס לא תקין (מאושר בתנאים תקף רק למסלול לימות השנה)' : 'סטטוס לא תקין (מאושר לקטניות תקף רק למסלול פסח)' });
+  if (approvalSource !== undefined && approvalSource !== null && !VALID_APPROVAL_SOURCE.includes(approvalSource))
+    return res.status(400).json({ error: 'מקור אישור לא תקין' });
+  // PATCH never carries a file -- any status change here with no reply file
+  // (new or pre-existing) needs a source saying how it was actually obtained
+  if (status !== undefined && !approval.replyDocId) {
+    const effectiveSource = approvalSource !== undefined ? approvalSource : approval.approvalSource;
+    if (!effectiveSource) return res.status(400).json({ error: 'נדרש לציין מקור לאישור (טלפון / מייל / וואטסאפ / מכתב / שנה קודמת / רשימת גוף / אחר) כאשר אין קובץ תשובה' });
+  }
 
   const updates = { updatedById: req.user.id || null };
   if (status !== undefined) updates.status = status;
@@ -930,30 +999,21 @@ app.patch('/api/approvals/:id', requireAssistant, ah(async (req, res) => {
   if (conditionText !== undefined) updates.conditionText = conditionText || null;
   if (notes !== undefined) updates.notes = notes || null;
   if (validUntil !== undefined) updates.validUntil = validUntil ? new Date(validUntil) : null;
-  if (passoverStatus !== undefined) updates.passoverStatus = passoverStatus;
-  if (passoverYear !== undefined) updates.passoverYear = passoverYear || null;
-  if (passoverNote !== undefined) updates.passoverNote = passoverNote || null;
+  if (seasonYear !== undefined) updates.seasonYear = seasonYear || null;
+  if (approvalSource !== undefined) updates.approvalSource = approvalSource || null;
+  if (approvalSourceDetail !== undefined) updates.approvalSourceDetail = approvalSourceDetail || null;
 
   const updated = await prisma.rawMaterialApproval.update({
     where: { id }, data: updates, include: { kashrutBody: true, contact: true },
   });
-  const generalFieldsTouched = [status, kashrutLevel, conditionText, notes, validUntil].some(v => v !== undefined);
+  const generalFieldsTouched = [status, kashrutLevel, conditionText, notes, validUntil, seasonYear, approvalSource, approvalSourceDetail].some(v => v !== undefined);
   if (generalFieldsTouched) {
     await prisma.rawMaterialApprovalEvent.create({
       data: {
         approvalId: id,
         type: (status !== undefined && status !== approval.status) ? 'STATUS_CHANGE' : 'NOTE',
         fromStatus: approval.status, toStatus: status !== undefined ? status : approval.status,
-        payload: { kashrutLevel, conditionText, notes, validUntil },
-        byUserId: req.user.id || null,
-      },
-    });
-  }
-  if (passoverStatus !== undefined && passoverStatus !== approval.passoverStatus) {
-    await prisma.rawMaterialApprovalEvent.create({
-      data: {
-        approvalId: id, type: 'STATUS_CHANGE',
-        payload: { field: 'passover', from: approval.passoverStatus, to: passoverStatus },
+        payload: { kashrutLevel, conditionText, notes, validUntil, seasonYear, approvalSource, approvalSourceDetail },
         byUserId: req.user.id || null,
       },
     });
@@ -962,68 +1022,114 @@ app.patch('/api/approvals/:id', requireAssistant, ah(async (req, res) => {
 }));
 
 /* ── send: real email via the existing nodemailer setup, or record-only for
- * a WhatsApp send the client already carried out via share/wa.me ── */
+ * a WhatsApp send the client already carried out via share/wa.me. Two-track
+ * revision: accepts multiple bodies and/or tracks in one call (one email
+ * per body, mentioning which track(s) are being asked), while the old
+ * single-body shape (kashrutBodyId + contactId) keeps working unchanged --
+ * it just means "one body, YEAR_ROUND". ── */
+const TRACK_LABEL = { YEAR_ROUND: 'לימות השנה', PASSOVER: 'לפסח' };
 app.post('/api/raw-materials/:id/send', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const rm = await prisma.rawMaterial.findUnique({ where: { id } });
   if (!rm) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
 
-  const { kashrutBodyId, contactId, docIds, message, via, recordOnly } = req.body;
+  const { docIds, message, via, recordOnly, followUp } = req.body;
   if (!['EMAIL', 'WHATSAPP'].includes(via)) return res.status(400).json({ error: 'ערוץ שליחה לא תקין' });
-  if (!kashrutBodyId) return res.status(400).json({ error: 'נא לבחור גוף כשרות' });
-  const body = await prisma.kashrutBody.findUnique({ where: { id: parseInt(kashrutBodyId) } });
-  if (!body) return res.status(404).json({ error: 'גוף כשרות לא נמצא' });
-  const contact = contactId ? await prisma.contact.findUnique({ where: { id: parseInt(contactId) } }) : null;
   const ids = Array.isArray(docIds) ? docIds.map(Number) : [];
   if (!ids.length) return res.status(400).json({ error: 'נא לבחור לפחות מסמך אחד לצירוף' });
   if (via === 'WHATSAPP' && !recordOnly)
     return res.status(400).json({ error: 'שליחת וואטסאפ מתבצעת בצד הלקוח -- יש לקרוא כאן עם recordOnly=true לאחר אישור השליחה' });
 
-  if (via === 'EMAIL' && !recordOnly) {
-    if (!contact || !contact.email) return res.status(400).json({ error: 'נא לבחור איש קשר עם כתובת מייל' });
-    const mailer = getMailer();
-    if (!mailer) return res.status(400).json({ error: 'שליחת מייל לא הוגדרה בשרת (חסר EMAIL_APP_PASSWORD)' });
-    const docs = await prisma.document.findMany({ where: { id: { in: ids } } });
-    const attachments = await Promise.all(docs.map(async (d) => {
-      const { stream, contentType } = await getObjectStream(d.fileUrl);
-      const ext = d.docExt ? '.' + d.docExt : '';
-      return { filename: (d.title || 'מסמך') + ext, content: stream, contentType };
-    }));
-    const defaultBody = `שלום,\n\nמצורפים מסמכים עבור חומר הגלם ${rm.name}.\n\nבברכה,\nאחים כהן`;
-    await mailer.sendMail({
-      from: process.env.EMAIL_FROM, to: contact.email,
-      subject: `אישור כשרות — ${rm.name}`,
-      text: message || defaultBody,
-      attachments,
-    });
+  let bodyIds, tracks, contactIdByBody;
+  if (Array.isArray(req.body.kashrutBodyIds)) {
+    bodyIds = req.body.kashrutBodyIds.map(Number);
+    tracks = Array.isArray(req.body.tracks) && req.body.tracks.length ? req.body.tracks : ['YEAR_ROUND'];
+    contactIdByBody = req.body.contactIds || {};
+  } else if (req.body.kashrutBodyId) {
+    bodyIds = [parseInt(req.body.kashrutBodyId)];
+    tracks = ['YEAR_ROUND'];
+    contactIdByBody = req.body.contactId ? { [req.body.kashrutBodyId]: req.body.contactId } : {};
+  } else {
+    return res.status(400).json({ error: 'נא לבחור גוף כשרות אחד לפחות' });
+  }
+  if (!bodyIds.length) return res.status(400).json({ error: 'נא לבחור גוף כשרות אחד לפחות' });
+  if (!tracks.every(t => ['YEAR_ROUND', 'PASSOVER'].includes(t))) return res.status(400).json({ error: 'מסלול לא תקין' });
+
+  const bodies = await prisma.kashrutBody.findMany({ where: { id: { in: bodyIds } } });
+  if (bodies.length !== bodyIds.length) return res.status(404).json({ error: 'גוף כשרות לא נמצא' });
+
+  const sendRealEmail = via === 'EMAIL' && !recordOnly;
+  const mailer = sendRealEmail ? getMailer() : null;
+  if (sendRealEmail && !mailer) return res.status(400).json({ error: 'שליחת מייל לא הוגדרה בשרת (חסר EMAIL_APP_PASSWORD)' });
+  const docs = sendRealEmail ? await prisma.document.findMany({ where: { id: { in: ids } } }) : [];
+  const tracksText = tracks.length === 2 ? 'לימות השנה ולפסח' : TRACK_LABEL[tracks[0]];
+
+  const results = [];
+  for (const body of bodies) {
+    const contactId = contactIdByBody[body.id] ?? contactIdByBody[String(body.id)] ?? null;
+    const contact = contactId ? await prisma.contact.findUnique({ where: { id: parseInt(contactId) } }) : null;
+
+    if (sendRealEmail) {
+      if (!contact || !contact.email) return res.status(400).json({ error: `נא לבחור איש קשר עם כתובת מייל לגוף ${body.name}` });
+      const attachments = await Promise.all(docs.map(async (d) => {
+        const { stream, contentType } = await getObjectStream(d.fileUrl);
+        const ext = d.docExt ? '.' + d.docExt : '';
+        return { filename: (d.title || 'מסמך') + ext, content: stream, contentType };
+      }));
+      const defaultBody = `שלום,\n\nמצורפים מסמכים עבור חומר הגלם ${rm.name}, בנושא ${tracksText}.\n\nבברכה,\nאחים כהן`;
+      await mailer.sendMail({
+        from: process.env.EMAIL_FROM, to: contact.email,
+        subject: `אישור כשרות (${tracksText}) — ${rm.name}`,
+        text: message || defaultBody,
+        attachments,
+      });
+    }
+
+    for (const track of tracks) {
+      const approval = await prisma.rawMaterialApproval.upsert({
+        where: { rawMaterialId_kashrutBodyId_track: { rawMaterialId: id, kashrutBodyId: body.id, track } },
+        create: { rawMaterialId: id, kashrutBodyId: body.id, track, contactId: contact ? contact.id : null, status: 'SENT_PENDING', sentAt: new Date(), sentVia: via, sentDocIds: ids },
+        update: { contactId: contact ? contact.id : null, status: 'SENT_PENDING', sentAt: new Date(), sentVia: via, sentDocIds: ids },
+        include: { kashrutBody: true, contact: true },
+      });
+      await prisma.rawMaterialApprovalEvent.create({
+        data: {
+          approvalId: approval.id, type: 'SENT', toStatus: 'SENT_PENDING',
+          payload: { via, docIds: ids, recordOnly: !!recordOnly, contactId: contact ? contact.id : null, followUp: !!followUp },
+          byUserId: req.user.id || null,
+        },
+      });
+      results.push(regApprovalOut(approval));
+    }
   }
 
-  const approval = await prisma.rawMaterialApproval.upsert({
-    where: { rawMaterialId_kashrutBodyId: { rawMaterialId: id, kashrutBodyId: body.id } },
-    create: { rawMaterialId: id, kashrutBodyId: body.id, contactId: contact ? contact.id : null, status: 'SENT_PENDING', sentAt: new Date(), sentVia: via, sentDocIds: ids },
-    update: { contactId: contact ? contact.id : null, status: 'SENT_PENDING', sentAt: new Date(), sentVia: via, sentDocIds: ids },
-    include: { kashrutBody: true, contact: true },
-  });
-  await prisma.rawMaterialApprovalEvent.create({
-    data: {
-      approvalId: approval.id, type: 'SENT', toStatus: 'SENT_PENDING',
-      payload: { via, docIds: ids, recordOnly: !!recordOnly, contactId: contact ? contact.id : null },
-      byUserId: req.user.id || null,
-    },
-  });
-  res.json(regApprovalOut(approval));
+  res.json(bodyIds.length === 1 && tracks.length === 1 ? results[0] : results);
 }));
 
-/* ── reply: upload the reply as a Document, close out the approval ── */
+/* ── reply: upload the reply as a Document, close out the approval. Two-
+ * track revision: validates status against the approval's own track, takes
+ * an optional seasonYear, and an optional alsoApprovalId so one reply
+ * letter can close both tracks of the same body (same file, same date) --
+ * that second approval must be the other track of the same material+body. ── */
 app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const approval = await prisma.rawMaterialApproval.findUnique({ where: { id } });
   if (!approval) return res.status(404).json({ error: 'רשומת אישור לא נמצאה' });
-  const { status, replyAt, conditionText, notes, passoverStatus, passoverYear, passoverNote } = req.body;
-  if (!['APPROVED', 'REJECTED', 'CONDITIONAL'].includes(status))
-    return res.status(400).json({ error: 'נא לציין סטטוס תשובה (מאושר / נדחה / מאושר בתנאים)' });
-  const VALID_PASSOVER = ['NOT_ASKED', 'PASSOVER', 'PASSOVER_KITNIYOT', 'NOT_PASSOVER'];
-  if (passoverStatus !== undefined && !VALID_PASSOVER.includes(passoverStatus)) return res.status(400).json({ error: 'סטטוס פסח לא תקין' });
+  const { status, replyAt, conditionText, notes, seasonYear, approvalSource, approvalSourceDetail, alsoApprovalId, alsoStatus, alsoConditionText, alsoSeasonYear } = req.body;
+  if (!isValidStatusForTrack(status, approval.track))
+    return res.status(400).json({ error: 'נא לציין סטטוס תשובה תקין למסלול זה' });
+  if (approvalSource !== undefined && approvalSource !== null && !VALID_APPROVAL_SOURCE.includes(approvalSource))
+    return res.status(400).json({ error: 'מקור אישור לא תקין' });
+
+  let also = null;
+  if (alsoApprovalId) {
+    also = await prisma.rawMaterialApproval.findUnique({ where: { id: parseInt(alsoApprovalId) } });
+    if (!also) return res.status(404).json({ error: 'רשומת האישור הנוספת לא נמצאה' });
+    if (also.rawMaterialId !== approval.rawMaterialId || also.kashrutBodyId !== approval.kashrutBodyId || also.track === approval.track)
+      return res.status(400).json({ error: 'רשומת האישור הנוספת חייבת להיות המסלול האחר של אותו חומר גלם ואותו גוף כשרות' });
+    if (!isValidStatusForTrack(alsoStatus, also.track))
+      return res.status(400).json({ error: 'נא לציין סטטוס תשובה תקין למסלול הנוסף' });
+  }
 
   let replyDocId = approval.replyDocId;
   if (req.file) {
@@ -1039,17 +1145,28 @@ app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah
     });
     replyDocId = doc.id;
   }
+  const replyDate = replyAt ? new Date(replyAt) : new Date();
+
+  // no reply file (new or pre-existing) -- a source for how the status was
+  // actually obtained is required, for this track and (if present) the also-track
+  if (!replyDocId) {
+    const effectiveSource = approvalSource !== undefined ? approvalSource : approval.approvalSource;
+    if (!effectiveSource) return res.status(400).json({ error: 'נדרש לציין מקור לאישור (טלפון / מייל / וואטסאפ / מכתב / שנה קודמת / רשימת גוף / אחר) כאשר אין קובץ תשובה' });
+    if (also) {
+      const alsoEffectiveSource = approvalSource !== undefined ? approvalSource : also.approvalSource;
+      if (!alsoEffectiveSource) return res.status(400).json({ error: 'נדרש לציין מקור לאישור גם למסלול הנוסף כאשר אין קובץ תשובה' });
+    }
+  }
 
   const updated = await prisma.rawMaterialApproval.update({
     where: { id },
     data: {
-      status, replyDocId,
-      replyAt: replyAt ? new Date(replyAt) : new Date(),
+      status, replyDocId, replyAt: replyDate,
       conditionText: conditionText !== undefined ? (conditionText || null) : approval.conditionText,
       notes: notes !== undefined ? (notes || null) : approval.notes,
-      ...(passoverStatus !== undefined ? { passoverStatus } : {}),
-      ...(passoverYear !== undefined ? { passoverYear: passoverYear || null } : {}),
-      ...(passoverNote !== undefined ? { passoverNote: passoverNote || null } : {}),
+      seasonYear: seasonYear !== undefined ? (seasonYear || null) : approval.seasonYear,
+      ...(approvalSource !== undefined ? { approvalSource: approvalSource || null } : {}),
+      ...(approvalSourceDetail !== undefined ? { approvalSourceDetail: approvalSourceDetail || null } : {}),
       updatedById: req.user.id || null,
     },
     include: { kashrutBody: true, contact: true },
@@ -1057,19 +1174,34 @@ app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah
   await prisma.rawMaterialApprovalEvent.create({
     data: {
       approvalId: id, type: 'REPLY', fromStatus: approval.status, toStatus: status,
-      payload: { replyDocId, conditionText, notes }, byUserId: req.user.id || null,
+      payload: { replyDocId, conditionText, notes, seasonYear, approvalSource, approvalSourceDetail }, byUserId: req.user.id || null,
     },
   });
-  if (passoverStatus !== undefined && passoverStatus !== approval.passoverStatus) {
+
+  let updatedAlso = null;
+  if (also) {
+    updatedAlso = await prisma.rawMaterialApproval.update({
+      where: { id: also.id },
+      data: {
+        status: alsoStatus, replyDocId, replyAt: replyDate,
+        conditionText: alsoConditionText !== undefined ? (alsoConditionText || null) : also.conditionText,
+        seasonYear: alsoSeasonYear !== undefined ? (alsoSeasonYear || null) : also.seasonYear,
+        ...(approvalSource !== undefined ? { approvalSource: approvalSource || null } : {}),
+        ...(approvalSourceDetail !== undefined ? { approvalSourceDetail: approvalSourceDetail || null } : {}),
+        updatedById: req.user.id || null,
+      },
+      include: { kashrutBody: true, contact: true },
+    });
     await prisma.rawMaterialApprovalEvent.create({
       data: {
-        approvalId: id, type: 'STATUS_CHANGE',
-        payload: { field: 'passover', from: approval.passoverStatus, to: passoverStatus },
+        approvalId: also.id, type: 'REPLY', fromStatus: also.status, toStatus: alsoStatus,
+        payload: { replyDocId, conditionText: alsoConditionText, seasonYear: alsoSeasonYear, approvalSource, approvalSourceDetail, sameLetterAs: id },
         byUserId: req.user.id || null,
       },
     });
   }
-  res.json(regApprovalOut(updated));
+
+  res.json(updatedAlso ? [regApprovalOut(updated), regApprovalOut(updatedAlso)] : regApprovalOut(updated));
 }));
 
 /* ── SKU view: this SKU's raw materials + the approval for its own required

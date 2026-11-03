@@ -64,7 +64,28 @@ enum RawMaterialApprovalStatus {
   SENT_PENDING
   APPROVED
   REJECTED
-  CONDITIONAL
+  CONDITIONAL       // valid only for track=YEAR_ROUND, enforced in the API
+  NEEDS_INFO        // added 3.11.2026 (two-track revision)
+  APPROVED_KITNIYOT // valid only for track=PASSOVER, enforced in the API; added 3.11.2026
+}
+
+// Which season an approval row is for -- added 3.11.2026 (two-track revision).
+// RawMaterialApproval now has one row per (rawMaterial, kashrutBody, track).
+enum ApprovalTrack {
+  YEAR_ROUND
+  PASSOVER
+}
+
+// How a status was obtained when set directly, without a reply file --
+// added 3.11.2026.
+enum ApprovalSource {
+  PHONE
+  EMAIL
+  WHATSAPP
+  LETTER
+  PREVIOUS_YEAR
+  BODY_LIST
+  OTHER
 }
 
 enum RawMaterialEventType {
@@ -74,8 +95,12 @@ enum RawMaterialEventType {
   NOTE
 }
 
-// Pesach approval lives as fields on the same RawMaterialApproval row, not
-// a separate kashrut body -- only bodies with handlesPassover=true use this.
+// DEPRECATED (3.11.2026, superseded same-day by the two-track revision in
+// docrepo-phase4-v2-tracks.md -- Passover is now its own ApprovalTrack row,
+// not fields bolted onto a single row). Kept, not dropped: these columns
+// held no real data, only already-cleaned-up TEST- rows, but the "additive
+// only, never drop" rule applies regardless. Not read or written anywhere
+// in server.js or raw-materials.js as of this revision.
 enum PassoverStatus {
   NOT_ASKED
   PASSOVER
@@ -193,6 +218,7 @@ model Document {
   rawMaterialDocuments   RawMaterialDocument[]
   rawMaterialDefaultFor  RawMaterial[]           @relation("RawMaterialDefaultDoc")
   rawMaterialReplyFor    RawMaterialApproval[]   @relation("RawMaterialApprovalReplyDoc")
+  rawMaterialOriginCertFor RawMaterial[]         @relation("RawMaterialOriginCertDoc")
 }
 
 model SkuLink {
@@ -280,6 +306,7 @@ model KashrutBody {
 
   contacts  Contact[]             @relation("ContactKashrutBody")
   approvals RawMaterialApproval[]
+  originForMaterials RawMaterial[] @relation("RawMaterialOriginKashrutBody")
 }
 
 model RawMaterial {
@@ -292,6 +319,16 @@ model RawMaterial {
   notes        String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+
+  // origin kashrut (the hechsher printed on the label itself) -- added
+  // 3.11.2026, two-track revision
+  originKashrutText    String?
+  originKashrutBodyId  Int?
+  originKashrutBody    KashrutBody? @relation("RawMaterialOriginKashrutBody", fields: [originKashrutBodyId], references: [id])
+  originCertDocId      Int?
+  originCertDoc        Document?    @relation("RawMaterialOriginCertDoc", fields: [originCertDocId], references: [id])
+  originCertValidUntil DateTime?
+  originHasCert        Boolean      @default(false)
 
   documents RawMaterialDocument[]
   approvals RawMaterialApproval[]
@@ -320,6 +357,12 @@ model RawMaterialApproval {
   contact       Contact?                  @relation(fields: [contactId], references: [id])
   status        RawMaterialApprovalStatus @default(NOT_SENT)
   kashrutLevel  String?
+  track         ApprovalTrack             @default(YEAR_ROUND) // added 3.11.2026, two-track revision
+  seasonYear    String?                                        // PASSOVER rows: Hebrew year, e.g. תשפ"ז
+  approvalSource       ApprovalSource?  // how a status was obtained when there's no reply file -- required in that case, enforced in the API
+  approvalSourceDetail String?         // free text, e.g. who said it / which email / which year
+  // DEPRECATED 3.11.2026 -- superseded by track/seasonYear above. Not
+  // dropped (held no real data), not read/written anywhere anymore.
   passoverStatus PassoverStatus           @default(NOT_ASKED)
   passoverYear  String?
   passoverNote  String?
@@ -339,7 +382,7 @@ model RawMaterialApproval {
 
   events RawMaterialApprovalEvent[]
 
-  @@unique([rawMaterialId, kashrutBodyId])
+  @@unique([rawMaterialId, kashrutBodyId, track])
 }
 
 model RawMaterialApprovalEvent {

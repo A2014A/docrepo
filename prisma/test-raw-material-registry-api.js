@@ -1,4 +1,6 @@
-/* Local smoke test for every Phase 3 raw-material-registry endpoint.
+/* Local smoke test for the raw-material-registry endpoints, covering Phase 3
+ * plus the 3.11.2026 two-track revision (docrepo-phase4-v2-tracks.md R1+R2)
+ * and the approvalSource/no-file addition made the same day.
  * Run against a locally-running `node server.js` (default http://localhost:3000).
  * IMPORTANT: this hits the LIVE Neon DB (no separate local DB exists). All
  * test records are prefixed "TEST-" and deleted at the end; row counts for
@@ -41,7 +43,7 @@ async function snapshot() {
 }
 
 (async () => {
-  console.log('=== Phase 3 API smoke test (live Neon DB, self-cleaning) ===\n');
+  console.log('=== Raw-material registry API smoke test (live Neon DB, self-cleaning) ===\n');
   const before = await snapshot(); // captured before the throwaway test-admin user exists too
 
   const setting = await prisma.syncState.findUnique({ where: { key: 'assistant_code' } });
@@ -71,9 +73,13 @@ async function snapshot() {
   const bodyLandau = bodies.body.find(b => b.name === 'הרב לנדא');
   const bodyOU = bodies.body.find(b => b.name === 'OU');
   check('seeded bodies include הרב לנדא and OU (OU inactive since 2026-11-03, still exists)', !!bodyLandau && !!bodyOU && bodyOU.active === false);
-  // a second ACTIVE body distinct from bodyLandau for the WhatsApp-send case below -- OU itself is now
-  // intentionally inactive (hidden from the approvals matrix), so it can't be used for that anymore
-  const bodySecond = bodies.body.find(b => b.active && b.name !== bodyLandau.name);
+  const activeBodies = bodies.body.filter(b => b.active);
+  const passoverBodies = activeBodies.filter(b => b.handlesPassover);
+  // distinct active bodies for the various send/patch/reply cases below
+  const bodySecond = activeBodies.find(b => b.name !== bodyLandau.name && !b.handlesPassover) || activeBodies.find(b => b.name !== bodyLandau.name);
+  const bodyPassover = passoverBodies[0];
+  const bodyThird = activeBodies.find(b => b.id !== bodyLandau.id && b.id !== bodySecond.id && b.id !== (bodyPassover && bodyPassover.id));
+  check('found distinct active bodies for the test cases (landau/second/passover/third)', !!bodyLandau && !!bodySecond && !!bodyPassover && !!bodyThird, { bodyLandau, bodySecond, bodyPassover, bodyThird });
 
   // create
   const name = `TEST-RawMaterial-${Date.now()}`;
@@ -84,6 +90,7 @@ async function snapshot() {
   // list + filter
   const list = await api('GET', '/api/raw-material-registry?q=' + encodeURIComponent(name));
   check('GET /api/raw-material-registry list finds it via q filter', list.status === 200 && list.body.some(r => r.id === id));
+  check('list item exposes origin-kashrut fields (empty for a fresh record)', list.body[0] && 'originKashrutText' in list.body[0] && 'originHasCert' in list.body[0]);
 
   // detail
   const detail = await api('GET', `/api/raw-material-registry/${id}`);
@@ -108,68 +115,99 @@ async function snapshot() {
   check('POST .../documents uploads a new file and links it (ANALYSIS role)', uploadedDoc.status === 201 && uploadedDoc.body.docRole === 'ANALYSIS', uploadedDoc.body);
   const uploadedDocId = uploadedDoc.body && uploadedDoc.body.docId;
 
-  // approvals matrix before any send -- every active body, all NOT_SENT
+  // ── approvals matrix (two-track): one row per active body for YEAR_ROUND,
+  // plus one row per handlesPassover body for PASSOVER ──
+  const expectedMatrixRows = activeBodies.length + passoverBodies.length;
   const matrix0 = await api('GET', `/api/raw-materials/${id}/approvals`);
-  check('GET approvals matrix returns one row per active body, all NOT_SENT', matrix0.status === 200 && matrix0.body.length === bodies.body.filter(b=>b.active).length && matrix0.body.every(a => a.status === 'NOT_SENT'));
-  check('matrix placeholders carry handlesPassover + default passoverStatus=NOT_ASKED', matrix0.body.every(a => a.passoverStatus === 'NOT_ASKED') && matrix0.body.some(a => a.handlesPassover === true) && matrix0.body.some(a => a.handlesPassover === false), matrix0.body.map(a=>[a.kashrutBodyName,a.handlesPassover,a.passoverStatus]));
+  check('matrix row count = active bodies + passover-handling active bodies', matrix0.status === 200 && matrix0.body.length === expectedMatrixRows, { got: matrix0.body.length, expected: expectedMatrixRows });
+  check('matrix rows all NOT_SENT with a track, no approvalSource yet', matrix0.body.every(a => a.status === 'NOT_SENT' && ['YEAR_ROUND', 'PASSOVER'].includes(a.track) && a.approvalSource == null));
+  check('matrix includes a PASSOVER row only for handlesPassover bodies', matrix0.body.filter(a => a.track === 'PASSOVER').length === passoverBodies.length);
 
-  // send via EMAIL with recordOnly=true -- must NOT send a real email, just record
+  // old single-body send shape still works (kashrutBodyId + contactId) --
+  // defaults to track=YEAR_ROUND
   const sendEmail = await api('POST', `/api/raw-materials/${id}/send`, {
     kashrutBodyId: bodyLandau.id, docIds: [anyDoc.id], via: 'EMAIL', recordOnly: true, message: 'TEST-בדיקה אוטומטית',
   });
-  check('POST send EMAIL recordOnly=true records SENT_PENDING without emailing', sendEmail.status === 200 && sendEmail.body.status === 'SENT_PENDING' && sendEmail.body.sentVia === 'EMAIL', sendEmail.body);
+  check('POST send (old single-body shape) EMAIL recordOnly=true records SENT_PENDING/YEAR_ROUND', sendEmail.status === 200 && sendEmail.body.status === 'SENT_PENDING' && sendEmail.body.sentVia === 'EMAIL' && sendEmail.body.track === 'YEAR_ROUND', sendEmail.body);
   const approvalId = sendEmail.body && sendEmail.body.id;
 
-  // send via WHATSAPP with recordOnly=true (the only mode allowed for WhatsApp)
   const sendWhatsapp = await api('POST', `/api/raw-materials/${id}/send`, {
     kashrutBodyId: bodySecond.id, docIds: [anyDoc.id], via: 'WHATSAPP', recordOnly: true,
   });
   check('POST send WHATSAPP recordOnly=true records SENT_PENDING', sendWhatsapp.status === 200 && sendWhatsapp.body.sentVia === 'WHATSAPP');
 
-  // guard: WHATSAPP without recordOnly must be rejected (no server-side WhatsApp API exists)
   const sendWhatsappNoRecord = await api('POST', `/api/raw-materials/${id}/send`, {
     kashrutBodyId: bodySecond.id, docIds: [anyDoc.id], via: 'WHATSAPP',
   });
   check('POST send WHATSAPP without recordOnly is rejected (400)', sendWhatsappNoRecord.status === 400);
 
-  // matrix after sending -- the two bodies sent to should now be SENT_PENDING, rest still NOT_SENT
+  // ── new multi-body x multi-track send shape ──
+  const multiSend = await api('POST', `/api/raw-materials/${id}/send`, {
+    kashrutBodyIds: [bodyThird.id, bodyPassover.id], tracks: ['YEAR_ROUND', 'PASSOVER'],
+    docIds: [anyDoc.id], via: 'WHATSAPP', recordOnly: true,
+  });
+  check('POST multi-body/multi-track send returns an array of 4 (2 bodies x 2 tracks)', multiSend.status === 200 && Array.isArray(multiSend.body) && multiSend.body.length === 4, multiSend.body);
+  check('multi-send results cover both tracks for both bodies', multiSend.status === 200 && ['YEAR_ROUND', 'PASSOVER'].every(t => multiSend.body.filter(a => a.track === t).length === 2));
+
   const matrix1 = await api('GET', `/api/raw-materials/${id}/approvals`);
   const sentCount = matrix1.body.filter(a => a.status === 'SENT_PENDING').length;
-  check('matrix reflects exactly 2 SENT_PENDING after the two sends', sentCount === 2, matrix1.body.map(a=>[a.kashrutBodyName,a.status]));
+  check('matrix reflects 6 SENT_PENDING after single-sends (2) + multi-send (4)', sentCount === 6, matrix1.body.map(a => [a.kashrutBodyName, a.track, a.status]));
 
-  // patch the approval directly (level + condition + status -> CONDITIONAL)
+  // ── track-specific status validation (R1: CONDITIONAL only YEAR_ROUND,
+  // APPROVED_KITNIYOT only PASSOVER) ──
+  const yearRoundApproval = multiSend.body.find(a => a.kashrutBodyId === bodyThird.id && a.track === 'YEAR_ROUND');
+  const passoverApproval = multiSend.body.find(a => a.kashrutBodyId === bodyPassover.id && a.track === 'PASSOVER');
+  const badKitniyot = await api('PATCH', `/api/approvals/${yearRoundApproval.id}`, { status: 'APPROVED_KITNIYOT', approvalSource: 'OTHER' });
+  check('PATCH rejects APPROVED_KITNIYOT on a YEAR_ROUND approval (400)', badKitniyot.status === 400, badKitniyot);
+  const badConditional = await api('PATCH', `/api/approvals/${passoverApproval.id}`, { status: 'CONDITIONAL', approvalSource: 'OTHER' });
+  check('PATCH rejects CONDITIONAL on a PASSOVER approval (400)', badConditional.status === 400, badConditional);
+  const goodKitniyot = await api('PATCH', `/api/approvals/${passoverApproval.id}`, { status: 'APPROVED_KITNIYOT', approvalSource: 'OTHER' });
+  check('PATCH accepts APPROVED_KITNIYOT on a PASSOVER approval', goodKitniyot.status === 200 && goodKitniyot.body.status === 'APPROVED_KITNIYOT', goodKitniyot.body);
+
+  // patch the landau approval directly (level + condition + status -> CONDITIONAL)
+  // -- no file yet on this approval, so approvalSource is now required
+  const patchNoSource = await api('PATCH', `/api/approvals/${approvalId}`, { status: 'CONDITIONAL' });
+  check('PATCH status change with no reply file and no approvalSource is rejected (400)', patchNoSource.status === 400, patchNoSource);
   const patchApproval = await api('PATCH', `/api/approvals/${approvalId}`, {
     status: 'CONDITIONAL', kashrutLevel: 'מהדרין', conditionText: 'TEST: בתנאי שיצרפו ניתוח מעבדה', notes: 'TEST',
+    approvalSource: 'OTHER', approvalSourceDetail: 'TEST: צוין בטופס הבדיקה',
   });
-  check('PATCH approval sets CONDITIONAL + conditionText', patchApproval.status === 200 && patchApproval.body.status === 'CONDITIONAL' && patchApproval.body.conditionText === 'TEST: בתנאי שיצרפו ניתוח מעבדה', patchApproval.body);
+  check('PATCH approval sets CONDITIONAL + conditionText + approvalSource', patchApproval.status === 200 && patchApproval.body.status === 'CONDITIONAL' && patchApproval.body.conditionText === 'TEST: בתנאי שיצרפו ניתוח מעבדה' && patchApproval.body.approvalSource === 'OTHER', patchApproval.body);
 
-  // passover fields via PATCH -- backend doesn't gate this by handlesPassover
-  // (that's a UI-only concern), so any approval accepts it
-  const patchPassover = await api('PATCH', `/api/approvals/${approvalId}`, {
-    passoverStatus: 'PASSOVER', passoverYear: 'תשפ"ז', passoverNote: 'TEST',
+  // ── get-or-create an approval row + manual approve from NOT_SENT, no file,
+  // source=PHONE (the addition made 3.11.2026) ──
+  const getOrCreate = await api('POST', `/api/raw-material-registry/${id}/approvals`, { kashrutBodyId: bodySecond.id, track: 'PASSOVER' });
+  check('POST .../approvals get-or-creates a NOT_SENT row (never sent)', getOrCreate.status === 201 && getOrCreate.body.status === 'NOT_SENT' && getOrCreate.body.track === 'PASSOVER', getOrCreate.body);
+  const getOrCreateAgain = await api('POST', `/api/raw-material-registry/${id}/approvals`, { kashrutBodyId: bodySecond.id, track: 'PASSOVER' });
+  check('calling it again returns the same row (idempotent get-or-create)', getOrCreateAgain.body.id === getOrCreate.body.id);
+
+  const phonePatchNoSource = await api('PATCH', `/api/approvals/${getOrCreate.body.id}`, { status: 'APPROVED_KITNIYOT' });
+  check('manual approve from NOT_SENT with no approvalSource is rejected (400)', phonePatchNoSource.status === 400, phonePatchNoSource);
+  const phonePatch = await api('PATCH', `/api/approvals/${getOrCreate.body.id}`, {
+    status: 'APPROVED_KITNIYOT', approvalSource: 'PHONE', approvalSourceDetail: 'TEST: שיחת טלפון עם הרב',
   });
-  check('PATCH sets passoverStatus/passoverYear/passoverNote', patchPassover.status === 200 && patchPassover.body.passoverStatus === 'PASSOVER' && patchPassover.body.passoverYear === 'תשפ"ז', patchPassover.body);
-  const eventsSoFar = await prisma.rawMaterialApprovalEvent.findMany({ where: { approvalId } });
-  const passoverEventsAfterPatch = eventsSoFar.filter(e => e.payload && e.payload.field === 'passover').length;
-  check('PATCH passover change wrote its own STATUS_CHANGE event with payload.field=passover', passoverEventsAfterPatch >= 1, passoverEventsAfterPatch);
+  check('manual approve from NOT_SENT with source=PHONE, no file, succeeds', phonePatch.status === 200 && phonePatch.body.status === 'APPROVED_KITNIYOT' && phonePatch.body.approvalSource === 'PHONE' && !phonePatch.body.replyDocId, phonePatch.body);
 
-  // reply: upload a reply file, close out as APPROVED (and also set
-  // passoverStatus in the same call) -- also creates a new Document row,
-  // captured for explicit cleanup below
+  // ── reply: upload a reply file, close out as APPROVED. Also exercises
+  // alsoApprovalId closing both tracks of the same body with one letter ──
+  const alsoRow = await api('POST', `/api/raw-material-registry/${id}/approvals`, { kashrutBodyId: bodyLandau.id, track: 'PASSOVER' });
+  check('get-or-create a PASSOVER row for bodyLandau to pair with its YEAR_ROUND approval', alsoRow.status === 201);
+
   const fd2 = new FormData();
   fd2.append('file', new Blob(['dummy reply pdf content'], { type: 'application/pdf' }), 'reply-test.pdf');
   fd2.append('name', 'TEST-reply-doc');
   fd2.append('status', 'APPROVED');
   fd2.append('notes', 'TEST: אושר בבדיקה');
-  fd2.append('passoverStatus', 'PASSOVER_KITNIYOT');
+  fd2.append('alsoApprovalId', String(alsoRow.body.id));
+  fd2.append('alsoStatus', 'APPROVED_KITNIYOT');
+  fd2.append('alsoSeasonYear', 'תשפ"ז');
   const reply = await api('POST', `/api/approvals/${approvalId}/reply`, fd2, true);
-  check('POST reply sets status=APPROVED with a replyDocId', reply.status === 200 && reply.body.status === 'APPROVED' && !!reply.body.replyDocId, reply.body);
-  check('POST reply also sets passoverStatus in the same call', reply.body.passoverStatus === 'PASSOVER_KITNIYOT', reply.body);
-  const replyDocId = reply.body && reply.body.replyDocId;
+  check('POST reply sets status=APPROVED with a replyDocId', reply.status === 200 && Array.isArray(reply.body) && reply.body[0].status === 'APPROVED' && !!reply.body[0].replyDocId, reply.body);
+  check('POST reply also closes the alsoApprovalId track (PASSOVER/APPROVED_KITNIYOT) with the same file', Array.isArray(reply.body) && reply.body[1].status === 'APPROVED_KITNIYOT' && reply.body[1].seasonYear === 'תשפ"ז' && reply.body[1].replyDocId === reply.body[0].replyDocId, reply.body);
+  const replyDocId = reply.body && reply.body[0] && reply.body[0].replyDocId;
 
-  // event log actually grew (patch + passover-patch + 2 sends + reply + reply-passover all write events)
   const events = await prisma.rawMaterialApprovalEvent.count({ where: { approvalId } });
-  check('RawMaterialApprovalEvent rows were written for this approval (>=5)', events >= 5, events);
+  check('RawMaterialApprovalEvent rows were written for the landau approval (>=3)', events >= 3, events);
 
   // link to a SKU (real SKU, not a test artifact -- just a link), then verify both read views
   const anySku = await prisma.sku.findFirst({ orderBy: { id: 'asc' } });

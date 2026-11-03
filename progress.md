@@ -258,9 +258,97 @@ fixed to use an active body instead of the now-inactive OU for its WhatsApp
 case. **28/28 passing**, self-cleanup independently re-verified (row counts
 before/after match across all touched tables).
 
-### Still to do in Step 4.2 (card screen) — not started
-Header+edit, documents gallery by role, approvals table (now needs a
-Pesach sub-row/columns for `handlesPassover` bodies), linked-SKU add/remove
-UI (reusing `openSkuPicker` with one new mode), and a `GET
-/api/approvals/:id/events` read endpoint for the "היסטוריה" button (doesn't
-exist yet — writes exist, no read).
+**⚠ SUPERSEDED same day by the two-track revision below** — the
+`passoverStatus`/`passoverYear`/`passoverNote` single-row approach above
+didn't survive contact with how the work actually happens (one body can be
+asked about year-round and Passover separately, with independent
+statuses). Columns were kept (never dropped, held no real data) but are no
+longer read or written anywhere.
+
+## Phase 4 revision — two approval tracks (per `docrepo-phase4-v2-tracks.md`)
+
+This **replaces Steps 4.2–4.8** of `docrepo-phase4-spec.md`. Step 4.1
+(list) stays, to be updated in R3. Still on branch `raw-materials-registry`,
+not pushed, not deployed.
+
+### R1 — Schema (done, additive; one accepted data-loss warning)
+Backed up all 17 tables first (`backups/2026-11-03T11-04-35-930Z/`).
+- `RawMaterialApproval.track` (new enum `ApprovalTrack: YEAR_ROUND|PASSOVER`,
+  default `YEAR_ROUND` — all 5 pre-existing rows became `YEAR_ROUND`
+  automatically) and `.seasonYear String?`.
+- Unique key changed `(rawMaterialId, kashrutBodyId)` →
+  `(rawMaterialId, kashrutBodyId, track)`. **`prisma db push` warned**
+  ("might be data loss... if there are existing duplicate values") —
+  stopped and reported it rather than auto-accepting, per instruction.
+  Verified empirically first (5 rows, 5 distinct old-key pairs, so the new
+  3-column constraint can't fail), explained that reasoning, then the user
+  explicitly said to proceed with `--accept-data-loss`. Applied clean, row
+  count unchanged (5), all defaulted to `YEAR_ROUND` as expected.
+- `RawMaterialApprovalStatus` gained `NEEDS_INFO` and `APPROVED_KITNIYOT`
+  (the latter valid only for `track=PASSOVER`; `CONDITIONAL` valid only for
+  `YEAR_ROUND` — enforced in the API via `isValidStatusForTrack()`, not a DB
+  constraint).
+- `RawMaterial` origin-kashrut fields: `originKashrutText`,
+  `originKashrutBodyId` → `KashrutBody`, `originCertDocId` → `Document`,
+  `originCertValidUntil`, `originHasCert`.
+- `passoverStatus`/`passoverYear`/`passoverNote` marked deprecated in a
+  schema comment, left in place (not dropped), zero reads/writes left in
+  `server.js`.
+- **Addition mid-step (user request before R1 finished):**
+  `RawMaterialApproval.approvalSource` (new enum `ApprovalSource: PHONE|
+  EMAIL|WHATSAPP|LETTER|PREVIOUS_YEAR|BODY_LIST|OTHER`, nullable) and
+  `.approvalSourceDetail String?` — pushed separately, no warning (nullable
+  additive). Queued for the R10 export's "מקור אישור" column later.
+
+### R2 — API (done)
+- **Matrix** `GET /api/raw-materials/:id/approvals`: one row per active
+  body for `YEAR_ROUND`, plus one row per `handlesPassover` body for
+  `PASSOVER` (both with `NOT_SENT` placeholders), plus any stray
+  `PASSOVER` row for a body that isn't/no-longer-is `handlesPassover`/active.
+- **List/detail**: approvals now carry `track`/`seasonYear`/
+  `approvalSource`/`approvalSourceDetail`; `RawMaterial` output carries the
+  origin-kashrut fields (read-only exposure — editing them is R4's job).
+- **Send** `POST /api/raw-materials/:id/send`: rewritten for multi-body ×
+  multi-track (`{kashrutBodyIds, tracks, contactIds: {bodyId: contactId},
+  docIds, message, via, recordOnly?, followUp?}`, one email per body
+  mentioning which track(s)). **Old single-body shape
+  (`kashrutBodyId`+`contactId`) still works unchanged** — treated as one
+  body × `YEAR_ROUND`. The old upsert's compound-key reference
+  (`rawMaterialId_kashrutBodyId`) had to be updated to the new 3-column key
+  name or every send would have thrown.
+- **Reply** `POST /api/approvals/:id/reply`: validates status against the
+  approval's own track; takes `seasonYear`; optional `alsoApprovalId` (+
+  `alsoStatus`/`alsoConditionText`/`alsoSeasonYear`) to close both tracks
+  of the same body with one letter/file — validated to be the *other*
+  track of the *same* material+body. Response becomes a 2-element array
+  when `alsoApprovalId` is used, otherwise unchanged (single object).
+- **PATCH** `/api/approvals/:id`: same per-track status validation; takes
+  `seasonYear`/`approvalSource`/`approvalSourceDetail`. Also fixed: the
+  general-fields event used to fire even when nothing in it changed — now
+  guarded.
+- **New, not in the spec's literal R2 bullets but required to make the
+  rest work:** `POST /api/raw-material-registry/:id/approvals`
+  (`{kashrutBodyId, track}`) — get-or-creates a `NOT_SENT` row with a real
+  id. Without it, `NOT_SENT` only ever existed as a synthesized matrix
+  placeholder (`id: null`), so there was no row to `PATCH` to record a
+  manual approval (e.g. a phone call) that was never preceded by a `/send`.
+- **approvalSource rule** (same-day addition): any `PATCH` or `/reply` that
+  changes `status` with no reply file attached (new or pre-existing)
+  requires `approvalSource` — enforced in both endpoints; the file itself
+  counts as evidence when present, so a filed reply never needs a source.
+
+### Regression
+`prisma/test-raw-material-registry-api.js` substantially extended:
+multi-body/multi-track send, per-track status validation (both directions),
+the get-or-create endpoint + idempotency, manual-approve-from-NOT_SENT with
+`source=PHONE`/no file (and the 400 when the source is missing),
+`alsoApprovalId` closing two tracks with one reply. All passover-specific
+assertions from the superseded approach removed.
+**40/40 passing**, self-cleanup independently re-verified (DB row counts
++ zero leftover `TEST-`/`test-admin` rows, checked outside the script too).
+
+### Next (per the spec's order of work) — not started
+R3 (list screen: track switch, new status colors incl. `NEEDS_INFO`
+purple/`APPROVED_KITNIYOT` yellow, origin-kashrut display, sticky legend,
+remove the old "פ" badge/passover filter) → R4 → R5 → R6 → R10 → R11 → R12
+→ R7 → R8 → R9, stopping after each with a browser-checkable summary.
