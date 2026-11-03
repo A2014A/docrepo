@@ -448,11 +448,63 @@ built. What actually landed in this pass:
   save/cancel both no-op if that flag is already gone, so the implicit
   blur a DOM-removal causes can't trigger a duplicate/contradictory save.
 
+### R4 — Raw-material card (done)
+`public/raw-materials.js` grew a second screen (~380 new lines) + a
+2-line `index.html` edit (card page container; the `'rmCard'` SKU-picker
+mode from the previous pass is now wired up for real). No backend
+changes needed — everything uses endpoints that already existed.
+- Clicking any list row (`rmOpenCard`) opens the card; the "מקור" cell's
+  click handler now also calls `event.stopPropagation()` so entering
+  inline-edit mode on that cell doesn't also open the card underneath it
+  (the propagation guard stays attached for the cell's whole edit
+  lifetime, not just the initial click, so typing inside the open input
+  can't leak a click through to the row either).
+- **Header**: name/supplier/manufacturer/notes, toggle-edit (view ↔ inline
+  form with שמור/ביטול), matching the spec's "an edit button" framing.
+- **"כשרות המקור" box**: two side-by-side sections (ימות השנה / פסח), each
+  autosave-per-field (blur for text, change for select/checkbox/date) via
+  `PATCH /api/raw-material-registry/:id` — no separate edit-mode toggle
+  for this box, since these are direct-reflecting settings fields rather
+  than a form you submit. Certificate fields offer *either* picking one of
+  the material's own already-uploaded documents from a dropdown, *or*
+  uploading a new file directly (which uploads with role `CERT` then
+  PATCHes it in as the cert doc — year-round upload also auto-sets
+  `originHasCert:true`).
+- **Documents gallery** grouped by the 6 roles; image thumbnails preview
+  inline, everything (including PDFs) opens via
+  `/api/docs/:id/download?inline=1` in a new tab so the browser's own
+  viewer renders it instead of forcing a download. Upload control per
+  card (file + role select).
+- **Approvals table, two sections** (ימות השנה / פסח) from the matrix
+  endpoint, columns per spec (body — with a "(מקור)" tag on
+  computed-origin rows — status badge, contact, sent/reply dates, reply
+  file link, condition/note, and a season-year column only in the
+  Passover section). "שלח"/"עדכן תשובה"/"שלח השלמה" (the last only shown
+  when status is `NEEDS_INFO`) show a "not built yet, coming in R5/R6"
+  toast for now — those are explicitly separate later steps. **"היסטוריה"
+  is real**, using the `GET /api/approvals/:id/events` endpoint added in
+  the previous pass: opens a modal (reusing the site's existing
+  `.modal-bg`/`.modal` CSS) listing every event newest-first. Both
+  "עדכן תשובה" and "היסטוריה" only appear on rows with a real approval id
+  (`NOT_SENT`/computed-origin placeholders have `id:null` — nothing to
+  open yet).
+- **Linked SKUs**: pills with a remove "✕" (`DELETE .../skus/:skuCode`);
+  "+ הוסף מק"ט" reuses the existing SKU picker via the `'rmCard'` mode
+  stub from the previous pass, now implemented (`rmCardOnSkuPicked`
+  loops the selection through `POST .../skus`).
+- All write affordances (edit buttons, autosave fields, upload, send/reply
+  stubs, SKU add/remove) hidden/disabled for `rmIsReadOnly()`
+  (assistant role / future demo mode) — "היסטוריה" and document preview
+  stay available since they're read-only.
+
+Verified via HTTP against real data (not just the dry test material):
+pulled a real card's `documents`/`skus`/matrix shape and a real approval's
+event history (from the Phase 2 migration) and confirmed every field the
+UI reads is actually present with the expected shape. Existing 48/48
+regression suite still passes unchanged (no backend touched this pass).
+
 ### Next
-R4 (card screen) — header edit, "כשרות המקור" box (two sections: ימות
-השנה/פסח), documents gallery by role, two-section approvals table
-(ימות השנה/פסח) with שלח/עדכן תשובה/שלח השלמה/היסטוריה buttons (the first
-three are R5/R6's job — show a "not built yet" message for now, exactly as
-done for the original Step 4.2 before the track revision), linked-SKU
-add/remove. Then R5 → R6 → R10 → R11 → R12 → R7 → R8 → R9, stopping after
-each with a browser-checkable summary.
+R5 (send modal) → R6 (reply modal) → R10 (Excel export) → R11 (Excel
+import) → R12 (bulk send) → R7 (add-material flow) → R8 (SKU tab) → R9
+(contacts/bodies settings), stopping after each with a browser-checkable
+summary.

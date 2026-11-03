@@ -381,7 +381,6 @@ function rmOriginCellClick(el) {
   const item = RM_STATE.items.find(i => i.id === id);
   if (!item) return;
   el.dataset.editing = '1';
-  el.removeAttribute('onclick');
   el.style.color = '';
 
   if (RM_STATE.track === 'PASSOVER') {
@@ -450,13 +449,393 @@ function rmRenderList(rows) {
       return `<div class="rm-dot-cell"><span class="rm-dot-wrap"><span class="rm-dot" style="background:${RM_STATUS_COLOR[s.status]}" title="${rmEscapeHtml(title)}"></span>${badge}</span></div>`;
     }).join('');
     return `
-      <div class="rm-row">
+      <div class="rm-row" onclick="rmOpenCard(${item.id})" style="cursor:pointer">
         <div class="rm-row-main">
           <div class="rm-row-name">${needsReview ? '<span class="rm-needs-review">לבדוק</span>' : ''}${rmEscapeHtml(item.name)}</div>
           <div class="rm-row-sub">${rmEscapeHtml(item.supplier || '— ספק לא ידוע —')}${item.manufacturer ? ' · ' + rmEscapeHtml(item.manufacturer) : ''} · ${skuText}</div>
         </div>
-        <div class="rm-origin-col${rmIsReadOnly() ? '' : ' rm-editable'}" data-rm-id="${item.id}"${rmIsReadOnly() ? '' : ' onclick="rmOriginCellClick(this)"'}${origin && origin.color ? ` style="color:${origin.color}"` : ''}>${origin ? rmEscapeHtml(origin.text) : '—'}</div>
+        <div class="rm-origin-col${rmIsReadOnly() ? '' : ' rm-editable'}" data-rm-id="${item.id}"${rmIsReadOnly() ? '' : ' onclick="rmOriginCellClick(this);event.stopPropagation()"'}${origin && origin.color ? ` style="color:${origin.color}"` : ''}>${origin ? rmEscapeHtml(origin.text) : '—'}</div>
         <div class="rm-dots-grid" style="grid-template-columns:${rmGridTemplate()}">${dots}</div>
       </div>`;
   }).join('');
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Raw-material card -- Phase 4 R4 (docrepo-phase4-v2-tracks.md).
+ * Opened from a list row. "שלח"/"עדכן תשובה"/"שלח השלמה" are R5/R6's job
+ * (show a toast for now, same as the original pre-track-revision Step 4.2
+ * approach); "היסטוריה" is real, using the GET /api/approvals/:id/events
+ * endpoint added alongside this. Linked-SKU "add" reuses index.html's
+ * existing openSkuPicker() via a new 'rmCard' mode (added there) that
+ * calls rmCardOnSkuPicked() below.
+ * ══════════════════════════════════════════════════════════════════════ */
+
+const RM_DOC_ROLE_LABEL = { LABEL: 'תווית', BACK_LABEL: 'תווית - צד שני', ANALYSIS: 'ניתוח', CERT: 'תעודה', SPEC: 'מפרט', OTHER: 'אחר' };
+const RM_DOC_ROLES = ['LABEL', 'BACK_LABEL', 'ANALYSIS', 'CERT', 'SPEC', 'OTHER'];
+const RM_IMAGE_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+const RM_EVENT_TYPE_LABEL = { SENT: 'נשלח', REPLY: 'התקבלה תשובה', STATUS_CHANGE: 'שינוי סטטוס', NOTE: 'עדכון' };
+
+let RM_CARD_ID = null, RM_CARD_DATA = null, RM_CARD_MATRIX = null, RM_CARD_EDITING_HEADER = false;
+
+function rmCardInjectStyles() {
+  if (document.getElementById('rmCardStyles')) return;
+  const style = document.createElement('style');
+  style.id = 'rmCardStyles';
+  style.textContent = `
+.rm-card-page{max-width:900px;margin:0 auto;padding:2rem;}
+.rmc-header-row{display:flex;align-items:center;gap:14px;margin-bottom:1.25rem;}
+.rmc-section{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.25rem;margin-bottom:1.1rem;}
+.rmc-section-title{font-weight:700;font-size:1rem;color:var(--ink);margin-bottom:.9rem;}
+.rmc-field-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;align-items:center;}
+.rmc-field-row label{font-size:.8rem;color:var(--ink2);min-width:110px;}
+.rmc-field-row input[type=text],.rmc-field-row select,.rmc-field-row input[type=date]{flex:1;min-width:140px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);font-family:'Heebo',sans-serif;font-size:.85rem;background:var(--card);color:var(--ink);}
+.rmc-origin-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+@media (max-width:700px){.rmc-origin-grid{grid-template-columns:1fr;}}
+.rmc-origin-box{border:1px solid var(--border2);border-radius:var(--radius);padding:12px;}
+.rmc-origin-box h4{font-size:.85rem;margin-bottom:8px;color:var(--ink);}
+.rmc-doc-roles{display:flex;flex-direction:column;gap:14px;}
+.rmc-doc-role-title{font-size:.82rem;font-weight:600;color:var(--ink2);margin-bottom:6px;}
+.rmc-doc-grid{display:flex;gap:10px;flex-wrap:wrap;}
+.rmc-doc-thumb{width:70px;height:70px;border-radius:8px;overflow:hidden;border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;background:var(--bg2);font-size:1.6rem;cursor:pointer;text-decoration:none;color:inherit;}
+.rmc-doc-thumb img{width:100%;height:100%;object-fit:cover;}
+.rmc-table{width:100%;border-collapse:collapse;font-size:.8rem;}
+.rmc-table th{text-align:right;padding:6px 8px;border-bottom:1px solid var(--border2);color:var(--ink2);font-weight:600;white-space:nowrap;}
+.rmc-table td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.rmc-status-badge{font-size:.72rem;padding:2px 8px;border-radius:99px;color:#fff;display:inline-block;white-space:nowrap;}
+.rmc-btn-sm{font-size:.72rem;padding:4px 8px;border-radius:6px;margin-left:4px;}
+.rmc-sku-pill{display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border-radius:99px;padding:4px 10px;font-size:.8rem;margin:3px;}
+.rmc-sku-pill span{cursor:pointer;color:var(--ink3);}
+.rm-hist-row{padding:8px 0;border-bottom:1px solid var(--border);font-size:.82rem;}
+.rm-hist-type{font-weight:600;color:var(--ink);}
+`;
+  document.head.appendChild(style);
+}
+
+function rmCardBuildShell() {
+  const page = document.getElementById('rawMaterialsCardPage');
+  if (!page || page.dataset.built) return;
+  page.dataset.built = '1';
+  page.innerHTML = `
+    <div class="rm-card-page">
+      <div class="rmc-header-row">
+        <button class="btn btn-outline" onclick="rmCloseCard()">→ חזרה לרשימה</button>
+      </div>
+      <div id="rmCardBody"></div>
+    </div>`;
+}
+
+async function rmOpenCard(id) {
+  RM_CARD_ID = id;
+  RM_CARD_EDITING_HEADER = false;
+  rmCardInjectStyles();
+  rmCardBuildShell();
+  document.getElementById('rawMaterialsPage').style.display = 'none';
+  document.getElementById('rawMaterialsCardPage').style.display = 'block';
+  await rmLoadCard();
+}
+
+function rmCloseCard() {
+  document.getElementById('rawMaterialsCardPage').style.display = 'none';
+  document.getElementById('rawMaterialsPage').style.display = 'block';
+}
+
+async function rmLoadCard() {
+  document.getElementById('rmCardBody').innerHTML = '<div class="loading"><div class="spinner"></div>טוען...</div>';
+  try {
+    const [detail, matrix] = await Promise.all([
+      apiFetch('/api/raw-material-registry/' + RM_CARD_ID),
+      apiFetch('/api/raw-materials/' + RM_CARD_ID + '/approvals'),
+    ]);
+    RM_CARD_DATA = detail;
+    RM_CARD_MATRIX = matrix;
+    rmRenderCard();
+  } catch (e) {
+    document.getElementById('rmCardBody').innerHTML = `<div class="alert alert-error">${rmEscapeHtml(e.message)}</div>`;
+  }
+}
+
+function rmRenderCard() {
+  document.getElementById('rmCardBody').innerHTML =
+    rmCardHeaderHtml() + rmCardOriginBoxHtml() + rmCardDocsHtml() +
+    rmCardApprovalsSectionHtml('YEAR_ROUND') + rmCardApprovalsSectionHtml('PASSOVER') + rmCardSkusHtml();
+}
+
+/* ── header: name/supplier/manufacturer/notes, toggle-edit ── */
+function rmCardHeaderHtml() {
+  const d = RM_CARD_DATA;
+  if (RM_CARD_EDITING_HEADER) {
+    return `
+      <div class="rmc-section">
+        <div class="rmc-field-row"><label>שם</label><input type="text" id="rmcName" value="${rmEscapeHtml(d.name)}"/></div>
+        <div class="rmc-field-row"><label>ספק</label><input type="text" id="rmcSupplier" value="${rmEscapeHtml(d.supplier)}"/></div>
+        <div class="rmc-field-row"><label>יצרן</label><input type="text" id="rmcManufacturer" value="${rmEscapeHtml(d.manufacturer)}"/></div>
+        <div class="rmc-field-row"><label>הערות</label><input type="text" id="rmcNotes" value="${rmEscapeHtml(d.notes)}"/></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-accent" onclick="rmCardSaveHeader()">שמור</button>
+          <button class="btn btn-outline" onclick="rmCardCancelHeaderEdit()">ביטול</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="rmc-section">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div>
+          <div style="font-size:1.3rem;font-weight:700;color:var(--ink)">${rmEscapeHtml(d.name)}</div>
+          <div style="font-size:.85rem;color:var(--ink2);margin-top:4px">${rmEscapeHtml(d.supplier || '— ספק לא ידוע —')}${d.manufacturer ? ' · ' + rmEscapeHtml(d.manufacturer) : ''}</div>
+          ${d.notes ? `<div style="font-size:.82rem;color:var(--ink3);margin-top:6px">${rmEscapeHtml(d.notes)}</div>` : ''}
+        </div>
+        ${rmIsReadOnly() ? '' : `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardEditHeader()">✎ ערוך</button>`}
+      </div>
+    </div>`;
+}
+function rmCardEditHeader() { RM_CARD_EDITING_HEADER = true; rmRenderCard(); }
+function rmCardCancelHeaderEdit() { RM_CARD_EDITING_HEADER = false; rmRenderCard(); }
+async function rmCardSaveHeader() {
+  const body = {
+    name: document.getElementById('rmcName').value.trim(),
+    supplier: document.getElementById('rmcSupplier').value.trim(),
+    manufacturer: document.getElementById('rmcManufacturer').value.trim(),
+    notes: document.getElementById('rmcNotes').value.trim(),
+  };
+  try {
+    await apiFetch('/api/raw-material-registry/' + RM_CARD_ID, { method: 'PATCH', body: JSON.stringify(body) });
+    showToast('נשמר בהצלחה');
+    RM_CARD_EDITING_HEADER = false;
+    await rmLoadCard();
+  } catch (e) { showToast(e.message); }
+}
+
+/* ── כשרות המקור: two sections (ימות השנה / פסח), autosave per field ── */
+function rmCardDocOptions(selectedId) {
+  return (RM_CARD_DATA.documents || []).map(doc =>
+    `<option value="${doc.docId}" ${doc.docId === selectedId ? 'selected' : ''}>${rmEscapeHtml(doc.title)} (${RM_DOC_ROLE_LABEL[doc.docRole] || doc.docRole})</option>`
+  ).join('');
+}
+
+function rmCardOriginBoxHtml() {
+  const d = RM_CARD_DATA;
+  const ro = rmIsReadOnly();
+  const bodies = RM_STATE.allBodies.filter(b => b.active);
+  const bodyOptions = '<option value="">— ללא —</option>' +
+    bodies.map(b => `<option value="${b.id}" ${d.originKashrutBodyId === b.id ? 'selected' : ''}>${rmEscapeHtml(b.shortName || b.name)}</option>`).join('');
+  const passoverStatusOptions = ['UNKNOWN', 'PASSOVER', 'PASSOVER_KITNIYOT', 'NOT_PASSOVER']
+    .map(s => `<option value="${s}" ${d.originPassoverStatus === s ? 'selected' : ''}>${RM_ORIGIN_PASSOVER_LABEL[s] || 'לא ידוע'}</option>`).join('');
+
+  return `
+    <div class="rmc-section">
+      <div class="rmc-section-title">כשרות המקור</div>
+      <div class="rmc-origin-grid">
+        <div class="rmc-origin-box">
+          <h4>ימות השנה</h4>
+          <div class="rmc-field-row"><label>טקסט הכשר</label><input type="text" value="${rmEscapeHtml(d.originKashrutText)}" onblur="rmCardSaveOriginField('originKashrutText', this.value)" ${ro ? 'disabled' : ''}/></div>
+          <div class="rmc-field-row"><label>גוף (אופציונלי)</label><select onchange="rmCardSaveOriginField('originKashrutBodyId', this.value)" ${ro ? 'disabled' : ''}>${bodyOptions}</select></div>
+          <div class="rmc-field-row"><label>יש תעודה</label><input type="checkbox" ${d.originHasCert ? 'checked' : ''} onchange="rmCardSaveOriginField('originHasCert', this.checked)" ${ro ? 'disabled' : ''}/></div>
+          <div class="rmc-field-row"><label>תעודה (קובץ קיים)</label><select onchange="rmCardSaveOriginField('originCertDocId', this.value)" ${ro ? 'disabled' : ''}><option value="">— ללא —</option>${rmCardDocOptions(d.originCertDocId)}</select></div>
+          ${ro ? '' : `<div class="rmc-field-row"><label>או העלה חדש</label><input type="file" onchange="rmCardUploadOriginCert(this,'year')"/></div>`}
+          <div class="rmc-field-row"><label>תוקף עד</label><input type="date" value="${d.originCertValidUntil ? d.originCertValidUntil.slice(0, 10) : ''}" onchange="rmCardSaveOriginField('originCertValidUntil', this.value)" ${ro ? 'disabled' : ''}/></div>
+        </div>
+        <div class="rmc-origin-box">
+          <h4>פסח</h4>
+          <div class="rmc-field-row"><label>טקסט מקור לפסח</label><input type="text" value="${rmEscapeHtml(d.originPassoverText)}" onblur="rmCardSaveOriginField('originPassoverText', this.value)" ${ro ? 'disabled' : ''}/></div>
+          <div class="rmc-field-row"><label>סטטוס</label><select onchange="rmCardSaveOriginField('originPassoverStatus', this.value)" ${ro ? 'disabled' : ''}>${passoverStatusOptions}</select></div>
+          <div class="rmc-field-row"><label>תעודה (קובץ קיים)</label><select onchange="rmCardSaveOriginField('originPassoverCertDocId', this.value)" ${ro ? 'disabled' : ''}><option value="">— ללא —</option>${rmCardDocOptions(d.originPassoverCertDocId)}</select></div>
+          ${ro ? '' : `<div class="rmc-field-row"><label>או העלה חדש</label><input type="file" onchange="rmCardUploadOriginCert(this,'passover')"/></div>`}
+          <div class="rmc-field-row"><label>תוקף עד</label><input type="date" value="${d.originPassoverValidUntil ? d.originPassoverValidUntil.slice(0, 10) : ''}" onchange="rmCardSaveOriginField('originPassoverValidUntil', this.value)" ${ro ? 'disabled' : ''}/></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function rmCardSaveOriginField(field, value) {
+  const body = {};
+  if (field === 'originHasCert') body[field] = !!value;
+  else if (field === 'originKashrutBodyId' || field === 'originCertDocId' || field === 'originPassoverCertDocId') body[field] = value ? parseInt(value) : null;
+  else body[field] = value || null;
+  try {
+    RM_CARD_DATA = await apiFetch('/api/raw-material-registry/' + RM_CARD_ID, { method: 'PATCH', body: JSON.stringify(body) });
+    showToast('נשמר');
+  } catch (e) {
+    showToast(e.message);
+    rmRenderCard();
+  }
+}
+
+async function rmCardUploadOriginCert(inputEl, which) {
+  const file = inputEl.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('docRole', 'CERT');
+  fd.append('name', which === 'passover' ? 'תעודת מקור - פסח' : 'תעודת מקור');
+  try {
+    const res = await fetch(API + '/api/raw-material-registry/' + RM_CARD_ID + '/documents', { method: 'POST', headers: authHeaders(), body: fd });
+    const doc = await res.json();
+    if (!res.ok) throw new Error(doc.error || 'שגיאה בהעלאה');
+    const patch = which === 'passover' ? { originPassoverCertDocId: doc.docId } : { originCertDocId: doc.docId, originHasCert: true };
+    await apiFetch('/api/raw-material-registry/' + RM_CARD_ID, { method: 'PATCH', body: JSON.stringify(patch) });
+    showToast('הקובץ הועלה והוגדר כתעודת מקור');
+    await rmLoadCard();
+  } catch (e) { showToast(e.message); }
+}
+
+/* ── documents gallery by role ── */
+function rmCardDocThumb(doc) {
+  const isImg = RM_IMAGE_EXT.includes((doc.ext || '').toLowerCase());
+  const href = `/api/docs/${doc.docId}/download?inline=1`;
+  const inner = isImg ? `<img src="${href}" alt="${rmEscapeHtml(doc.title)}"/>` : '📄';
+  return `<a class="rmc-doc-thumb" href="${href}" target="_blank" title="${rmEscapeHtml(doc.title)}">${inner}</a>`;
+}
+
+function rmCardDocsHtml() {
+  const docs = RM_CARD_DATA.documents || [];
+  const byRole = {};
+  RM_DOC_ROLES.forEach(r => byRole[r] = docs.filter(d => d.docRole === r));
+  return `
+    <div class="rmc-section">
+      <div class="rmc-section-title">מסמכים ותמונות</div>
+      <div class="rmc-doc-roles">
+        ${RM_DOC_ROLES.map(role => `
+          <div>
+            <div class="rmc-doc-role-title">${RM_DOC_ROLE_LABEL[role]}${byRole[role].length ? ' (' + byRole[role].length + ')' : ''}</div>
+            <div class="rmc-doc-grid">${byRole[role].map(rmCardDocThumb).join('') || '<span style="font-size:.78rem;color:var(--ink3)">—</span>'}</div>
+          </div>`).join('')}
+      </div>
+      ${rmIsReadOnly() ? '' : `
+        <div style="display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap">
+          <select id="rmcUploadRole">${RM_DOC_ROLES.map(r => `<option value="${r}">${RM_DOC_ROLE_LABEL[r]}</option>`).join('')}</select>
+          <input type="file" id="rmcUploadFile"/>
+          <button class="btn btn-accent rmc-btn-sm" onclick="rmCardUploadDoc()">⬆ העלה</button>
+        </div>`}
+    </div>`;
+}
+
+async function rmCardUploadDoc() {
+  const fileInput = document.getElementById('rmcUploadFile');
+  const file = fileInput.files[0];
+  if (!file) { showToast('נא לבחור קובץ'); return; }
+  const role = document.getElementById('rmcUploadRole').value;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('docRole', role);
+  try {
+    const res = await fetch(API + '/api/raw-material-registry/' + RM_CARD_ID + '/documents', { method: 'POST', headers: authHeaders(), body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'שגיאה בהעלאה');
+    showToast('הקובץ הועלה');
+    await rmLoadCard();
+  } catch (e) { showToast(e.message); }
+}
+
+/* ── approvals table, two sections ── */
+function rmCardApprovalsSectionHtml(track) {
+  const rows = (RM_CARD_MATRIX || []).filter(a => a.track === track);
+  const cols = track === 'PASSOVER'
+    ? ['גוף', 'סטטוס', 'איש קשר', 'נשלח', 'תשובה', 'קובץ תשובה', 'תנאי/הערה', 'שנה', '']
+    : ['גוף', 'סטטוס', 'איש קשר', 'נשלח', 'תשובה', 'קובץ תשובה', 'תנאי/הערה', ''];
+  return `
+    <div class="rmc-section">
+      <div class="rmc-section-title">אישורים — ${track === 'PASSOVER' ? 'פסח' : 'ימות השנה'}</div>
+      <div style="overflow-x:auto">
+        <table class="rmc-table">
+          <thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(a => rmCardApprovalRowHtml(a, track)).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function rmCardApprovalRowHtml(a, track) {
+  const replyFile = a.replyDocId ? `<a href="/api/docs/${a.replyDocId}/download?inline=1" target="_blank">📄</a>` : '—';
+  const buttons = rmIsReadOnly() ? '' : `
+    <button class="btn btn-outline rmc-btn-sm" onclick="rmCardStub('שליחה')">שלח</button>
+    ${a.id ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardStub('עדכון תשובה')">עדכן תשובה</button>` : ''}
+    ${a.status === 'NEEDS_INFO' ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardStub('שליחת השלמה')">שלח השלמה</button>` : ''}
+    ${a.id ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardOpenHistory(${a.id})">היסטוריה</button>` : ''}`;
+  return `
+    <tr>
+      <td>${rmEscapeHtml(a.kashrutBodyName)}${a.viaOrigin ? ` <span title="מקור" style="color:var(--ink3)">(מקור)</span>` : ''}</td>
+      <td><span class="rmc-status-badge" style="background:${RM_STATUS_COLOR[a.status]}">${RM_STATUS_LABEL[a.status]}</span></td>
+      <td>${rmEscapeHtml(a.contactName || '—')}</td>
+      <td>${a.sentAt ? fmtDate(a.sentAt) : '—'}</td>
+      <td>${a.replyAt ? fmtDate(a.replyAt) : '—'}</td>
+      <td>${replyFile}</td>
+      <td>${rmEscapeHtml(a.conditionText || a.notes || '—')}</td>
+      ${track === 'PASSOVER' ? `<td>${rmEscapeHtml(a.seasonYear || '—')}</td>` : ''}
+      <td style="white-space:nowrap">${buttons}</td>
+    </tr>`;
+}
+
+function rmCardStub(what) {
+  showToast(what + ' תתווסף בשלב מאוחר יותר (R5/R6)');
+}
+
+/* ── history modal (real -- the one R4 piece that doesn't need R5/R6) ── */
+function rmCardInjectHistoryModal() {
+  if (document.getElementById('rmHistoryModal')) return;
+  const div = document.createElement('div');
+  div.className = 'modal-bg';
+  div.id = 'rmHistoryModal';
+  div.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">היסטוריית אישור</div>
+        <button class="modal-close" onclick="document.getElementById('rmHistoryModal').classList.remove('open')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="rmHistoryBody" style="max-height:400px;overflow-y:auto"></div>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+async function rmCardOpenHistory(approvalId) {
+  rmCardInjectHistoryModal();
+  document.getElementById('rmHistoryBody').innerHTML = '<div class="loading"><div class="spinner"></div>טוען...</div>';
+  document.getElementById('rmHistoryModal').classList.add('open');
+  try {
+    const events = await apiFetch('/api/approvals/' + approvalId + '/events');
+    document.getElementById('rmHistoryBody').innerHTML = events.length ? events.map(e => `
+      <div class="rm-hist-row">
+        <div class="rm-hist-type">${RM_EVENT_TYPE_LABEL[e.type] || e.type}</div>
+        <div style="font-size:.78rem;color:var(--ink3)">${fmtDate(e.at)}${e.byUserName ? ' · ' + rmEscapeHtml(e.byUserName) : ''}</div>
+        ${e.fromStatus || e.toStatus ? `<div style="font-size:.8rem;margin-top:3px">${e.fromStatus ? (RM_STATUS_LABEL[e.fromStatus] || e.fromStatus) : '—'} ← ${e.toStatus ? (RM_STATUS_LABEL[e.toStatus] || e.toStatus) : '—'}</div>` : ''}
+        ${e.payload ? `<div style="font-size:.74rem;color:var(--ink3);margin-top:3px">${rmEscapeHtml(JSON.stringify(e.payload))}</div>` : ''}
+      </div>`).join('') : '<div style="padding:1rem;text-align:center;color:var(--ink3)">אין היסטוריה</div>';
+  } catch (e) {
+    document.getElementById('rmHistoryBody').innerHTML = `<div class="alert alert-error">${rmEscapeHtml(e.message)}</div>`;
+  }
+}
+
+/* ── linked SKUs: add/remove ── */
+function rmCardSkusHtml() {
+  const skus = RM_CARD_DATA.skus || [];
+  return `
+    <div class="rmc-section">
+      <div class="rmc-section-title">מק"טים מקושרים</div>
+      <div>
+        ${skus.length ? skus.map(s => `
+          <span class="rmc-sku-pill">${rmEscapeHtml(s.id)} — ${rmEscapeHtml(s.name)}
+            ${rmIsReadOnly() ? '' : `<span onclick="rmCardRemoveSku('${jsAttr(s.id)}')">✕</span>`}
+          </span>`).join('') : '<span style="font-size:.82rem;color:var(--ink3)">אין מק"טים מקושרים</span>'}
+      </div>
+      ${rmIsReadOnly() ? '' : `<button class="btn btn-outline rmc-btn-sm" style="margin-top:8px" onclick="openSkuPicker('rmCard')">+ הוסף מק"ט</button>`}
+    </div>`;
+}
+
+async function rmCardRemoveSku(skuCode) {
+  if (!confirm('להסיר את מק"ט ' + skuCode + '?')) return;
+  try {
+    await apiFetch('/api/raw-material-registry/' + RM_CARD_ID + '/skus/' + encodeURIComponent(skuCode), { method: 'DELETE' });
+    showToast('המק"ט הוסר');
+    await rmLoadCard();
+  } catch (e) { showToast(e.message); }
+}
+
+async function rmCardOnSkuPicked(chosen) {
+  for (const sku of chosen) {
+    try { await apiFetch('/api/raw-material-registry/' + RM_CARD_ID + '/skus', { method: 'POST', body: JSON.stringify({ skuCode: sku.id }) }); }
+    catch (e) { showToast(e.message); }
+  }
+  showToast('מק"טים נוספו');
+  await rmLoadCard();
 }
