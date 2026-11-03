@@ -612,7 +612,64 @@ Hebrew-safe UTF-8). Zero DB writes -- only `Document.findMany` (read) and
 an R2 `getObjectStream` per unique document. All 12 rows resolved and
 wrote successfully; verified non-zero file sizes on disk.
 
+## Side task: fix one wrong link from the batch-link side task (done)
+`exports/link-strict.csv`'s batch created doc 34 (cert 204564, regular
+apple vinegar) → SKU 17381 (the *Passover* variant, same display name but
+a different SKU id) -- a genuine mistake, not a script bug (both SKUs are
+literally named "חומץ תפוחים 1 ליטר - כהן"). Backed up first
+(`backups/2026-11-03T15-26-19-917Z/`), showed the exact wrong row
+(`SkuLink` id 454) and waited for approval before deleting it. Created
+the correct doc 34 → SKU 17183 link (id 532) first (additive, no gate
+needed), then deleted id 454 after approval. Net `SkuLink` count
+unchanged (490, +1/-1), verified.
+
+## R6 — Reply modal (done)
+Appended to `public/raw-materials.js`; backend already supported
+everything via the existing `alsoApprovalId` mechanism on `POST
+/api/approvals/:id/reply` (built alongside R2) -- one small backend
+symmetry fix was needed (below), otherwise frontend only.
+- "עדכן תשובה" on any row with a real approval id opens the modal fixed to
+  that row's **body** (not re-selectable -- the row already picked it),
+  showing **both of that body's tracks** (whichever have a real approval
+  row; a track with no row at all, e.g. a body that doesn't
+  `handlesPassover`, simply isn't offered). Each track has its own
+  checkbox (default-checked if `SENT_PENDING` **or** it's the track the
+  button was clicked from) and its own status dropdown, restricted to the
+  4-5 "decision" statuses (`APPROVED`/`REJECTED`/`NEEDS_INFO`/
+  `CONDITIONAL` for ימות השנה, swapping `CONDITIONAL`→`APPROVED_KITNIYOT`
+  for פסח) -- deliberately narrower than the full status set, since
+  `NOT_SENT`/`SENT_PENDING`/`SENT_FOR_REVIEW` aren't reply outcomes.
+- **Shared across whichever tracks are checked**: one file (optional),
+  one reply date (defaults today), notes, and an `approvalSource`
+  picker that only appears (and is required) when no file is attached --
+  matches the existing backend rule exactly.
+- **Per-track**: condition text (ימות השנה only) / season year (פסח
+  only), shown only for a checked track of that kind.
+- Submitting with both tracks checked sends the first (ימות השנה, if
+  present) as the primary reply and the second as `alsoApprovalId` +
+  `alsoStatus` (+ its own condition/season field) in the same call --
+  one shared file and date closes both tracks at once, as the backend
+  already supported.
+- **Small backend fix made for this step**: the `also`-track update in
+  `POST /api/approvals/:id/reply` only ever set `notes` on the *primary*
+  approval, never the also one, even though the spec treats notes as one
+  shared field for the whole reply. Fixed to share it onto both. New
+  regression check confirms it. **53/53 passing.**
+- **Caught and fixed a real bug before it shipped**: the submit handler
+  was calling `apiFetch(...)` for the multipart file upload --
+  `apiFetch` unconditionally forces `Content-Type: application/json`,
+  which would have broken the `FormData` body (no multipart boundary set
+  at all). Switched to the same raw-`fetch` + `authHeaders()` pattern
+  already used elsewhere in this file for uploads.
+- Re-render preserves already-typed values (file selection, condition
+  text, season year, notes, source detail) the same way the send modal's
+  message field does, since toggling a track checkbox or changing a
+  status re-renders the whole modal body.
+
+Verified: 53/53 regression suite passing; confirmed the reply modal's
+served JS live over HTTP.
+
 ### Next
-R6 (reply modal) → R10 (Excel export) → R11 (Excel import) → R12 (bulk
-send) → R7 (add-material flow) → R8 (SKU tab) → R9 (contacts/bodies
-settings), stopping after each with a browser-checkable summary.
+R10 (Excel export) → R11 (Excel import) → R12 (bulk send) → R7
+(add-material flow) → R8 (SKU tab) → R9 (contacts/bodies settings),
+stopping after each with a browser-checkable summary.

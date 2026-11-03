@@ -236,6 +236,7 @@ async function snapshot() {
   const reply = await api('POST', `/api/approvals/${approvalId}/reply`, fd2, true);
   check('POST reply sets status=APPROVED with a replyDocId', reply.status === 200 && Array.isArray(reply.body) && reply.body[0].status === 'APPROVED' && !!reply.body[0].replyDocId, reply.body);
   check('POST reply also closes the alsoApprovalId track (PASSOVER/APPROVED_KITNIYOT) with the same file', Array.isArray(reply.body) && reply.body[1].status === 'APPROVED_KITNIYOT' && reply.body[1].seasonYear === 'תשפ"ז' && reply.body[1].replyDocId === reply.body[0].replyDocId, reply.body);
+  check('shared notes landed on the also-track too (R6 symmetry fix)', Array.isArray(reply.body) && reply.body[1].notes === 'TEST: אושר בבדיקה', reply.body[1]);
   const replyDocId = reply.body && reply.body[0] && reply.body[0].replyDocId;
 
   const events = await prisma.rawMaterialApprovalEvent.count({ where: { approvalId } });

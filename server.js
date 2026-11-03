@@ -1270,6 +1270,7 @@ app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah
         status: alsoStatus, replyDocId, replyAt: replyDate,
         conditionText: alsoConditionText !== undefined ? (alsoConditionText || null) : also.conditionText,
         seasonYear: alsoSeasonYear !== undefined ? (alsoSeasonYear || null) : also.seasonYear,
+        notes: notes !== undefined ? (notes || null) : also.notes, // one shared reply note across both tracks
         ...(approvalSource !== undefined ? { approvalSource: approvalSource || null } : {}),
         ...(approvalSourceDetail !== undefined ? { approvalSourceDetail: approvalSourceDetail || null } : {}),
         updatedById: req.user.id || null,
@@ -1279,7 +1280,7 @@ app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah
     await prisma.rawMaterialApprovalEvent.create({
       data: {
         approvalId: also.id, type: 'REPLY', fromStatus: also.status, toStatus: alsoStatus,
-        payload: { replyDocId, conditionText: alsoConditionText, seasonYear: alsoSeasonYear, approvalSource, approvalSourceDetail, sameLetterAs: id },
+        payload: { replyDocId, conditionText: alsoConditionText, seasonYear: alsoSeasonYear, notes, approvalSource, approvalSourceDetail, sameLetterAs: id },
         byUserId: req.user.id || null,
       },
     });

@@ -748,7 +748,7 @@ function rmCardApprovalRowHtml(a, track) {
   const replyFile = a.replyDocId ? `<a href="/api/docs/${a.replyDocId}/download?inline=1" target="_blank">📄</a>` : '—';
   const buttons = rmIsReadOnly() ? '' : `
     <button class="btn btn-outline rmc-btn-sm" onclick="rmOpenSendModal(${a.kashrutBodyId},'${a.track}',false)">שלח</button>
-    ${a.id ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardStub('עדכון תשובה')">עדכן תשובה</button>` : ''}
+    ${a.id ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmOpenReplyModal(${a.id})">עדכן תשובה</button>` : ''}
     ${a.status === 'NEEDS_INFO' ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmOpenSendModal(${a.kashrutBodyId},'${a.track}',true)">שלח השלמה</button>` : ''}
     ${a.status === 'SENT_FOR_REVIEW' ? `<button class="btn btn-accent rmc-btn-sm" onclick="rmCardConfirmForward(${a.id})">✔ הועבר לגוף</button>` : ''}
     ${a.id ? `<button class="btn btn-outline rmc-btn-sm" onclick="rmCardOpenHistory(${a.id})">היסטוריה</button>` : ''}`;
@@ -1108,4 +1108,188 @@ async function rmSendSubmit() {
   document.getElementById('rmSendModal').classList.remove('open');
   btn.disabled = false;
   await rmLoadCard();
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * Reply modal -- Phase 4 R6 (docrepo-phase4-v2-tracks.md): pick the body
+ * (fixed to whichever row's "עדכן תשובה" was clicked), then show both of
+ * that body's tracks, each with its own status selector. Backend already
+ * supports exactly this via alsoApprovalId on POST /api/approvals/:id/reply
+ * (added alongside R2), so this is frontend only -- except one small
+ * backend symmetry fix (notes now shared onto the also-track too, it
+ * previously only landed on the primary one).
+ * ══════════════════════════════════════════════════════════════════════ */
+
+const RM_REPLY_STATUSES_BY_TRACK = {
+  YEAR_ROUND: ['APPROVED', 'REJECTED', 'NEEDS_INFO', 'CONDITIONAL'],
+  PASSOVER: ['APPROVED', 'REJECTED', 'NEEDS_INFO', 'APPROVED_KITNIYOT'],
+};
+
+let RM_REPLY = { tracks: {} }; // { YEAR_ROUND?: {approvalId,included,status}, PASSOVER?: {...} }
+
+function rmReplyInjectModal() {
+  if (document.getElementById('rmReplyModal')) return;
+  const div = document.createElement('div');
+  div.className = 'modal-bg';
+  div.id = 'rmReplyModal';
+  div.innerHTML = `
+    <div class="modal" style="max-width:520px">
+      <div class="modal-header">
+        <div class="modal-title">עדכון תשובה</div>
+        <button class="modal-close" onclick="document.getElementById('rmReplyModal').classList.remove('open')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="rmReplyBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('rmReplyModal').classList.remove('open')">ביטול</button>
+        <button class="btn btn-accent" id="rmReplySubmitBtn" onclick="rmReplySubmit()">שמור תשובה</button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+function rmOpenReplyModal(approvalId) {
+  const clicked = (RM_CARD_MATRIX || []).find(a => a.id === approvalId);
+  if (!clicked) return;
+  rmReplyInjectModal();
+  RM_REPLY.tracks = {};
+  for (const track of ['YEAR_ROUND', 'PASSOVER']) {
+    const row = RM_CARD_MATRIX.find(a => a.kashrutBodyId === clicked.kashrutBodyId && a.track === track);
+    if (!row || !row.id) continue; // no real row for this track -- nothing to reply to
+    const isDecisionStatus = RM_REPLY_STATUSES_BY_TRACK[track].includes(row.status);
+    RM_REPLY.tracks[track] = {
+      approvalId: row.id,
+      included: row.id === approvalId || row.status === 'SENT_PENDING',
+      status: isDecisionStatus ? row.status : RM_REPLY_STATUSES_BY_TRACK[track][0],
+    };
+  }
+  document.getElementById('rmReplyModal').classList.add('open');
+  rmReplyRender();
+}
+
+function rmReplyToggleTrack(track, checked) {
+  if (RM_REPLY.tracks[track]) RM_REPLY.tracks[track].included = checked;
+  rmReplyRender();
+}
+function rmReplySetStatus(track, status) {
+  if (RM_REPLY.tracks[track]) RM_REPLY.tracks[track].status = status;
+  rmReplyRender();
+}
+
+function rmReplyRender() {
+  const el = document.getElementById('rmReplyBody');
+  // preserve any already-typed values across re-renders (same issue as the send modal)
+  const keep = (id) => { const e = document.getElementById(id); return e ? e.value : ''; };
+  const conditionText = keep('rmReplyCondition');
+  const seasonYear = keep('rmReplySeasonYear');
+  const notes = keep('rmReplyNotes');
+  const approvalSourceDetail = keep('rmReplySourceDetail');
+  const replyAt = document.getElementById('rmReplyDate') ? document.getElementById('rmReplyDate').value : new Date().toISOString().slice(0, 10);
+  const approvalSource = document.getElementById('rmReplySource') ? document.getElementById('rmReplySource').value : '';
+  const hasFile = document.getElementById('rmReplyFile') && document.getElementById('rmReplyFile').files.length > 0;
+
+  const trackRows = Object.entries(RM_REPLY.tracks).map(([track, t]) => `
+    <div class="form-group" style="border:1px solid var(--border2);border-radius:8px;padding:10px">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:.86rem">
+        <input type="checkbox" ${t.included ? 'checked' : ''} onchange="rmReplyToggleTrack('${track}',this.checked)"/>
+        ${RM_TRACK_LABEL[track]}
+      </label>
+      ${t.included ? `
+        <select class="form-select" style="margin-top:6px" onchange="rmReplySetStatus('${track}',this.value)">
+          ${RM_REPLY_STATUSES_BY_TRACK[track].map(s => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${RM_STATUS_LABEL[s]}</option>`).join('')}
+        </select>
+        ${track === 'YEAR_ROUND' ? `<input type="text" class="form-input" id="rmReplyCondition" placeholder="תנאי (אם מאושר בתנאים)" value="${rmEscapeHtml(conditionText)}" style="margin-top:6px"/>` : ''}
+        ${track === 'PASSOVER' ? `<input type="text" class="form-input" id="rmReplySeasonYear" placeholder='שנה עברית, למשל תשפ"ז' value="${rmEscapeHtml(seasonYear)}" style="margin-top:6px"/>` : ''}
+      ` : ''}
+    </div>`).join('');
+
+  el.innerHTML = `
+    <div id="rmReplyAlert"></div>
+    ${trackRows}
+    <div class="form-group">
+      <label class="form-label">קובץ תשובה (אופציונלי)</label>
+      <input type="file" id="rmReplyFile" onchange="rmReplyRender()"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">תאריך תשובה</label>
+      <input type="date" class="form-input" id="rmReplyDate" value="${replyAt}"/>
+    </div>
+    ${!hasFile ? `
+      <div class="form-group">
+        <label class="form-label">מקור האישור (חובה כשאין קובץ)</label>
+        <select class="form-select" id="rmReplySource">
+          <option value="">— בחר —</option>
+          ${['PHONE', 'EMAIL', 'WHATSAPP', 'LETTER', 'PREVIOUS_YEAR', 'BODY_LIST', 'OTHER'].map(s => `<option value="${s}" ${approvalSource === s ? 'selected' : ''}>${RM_APPROVAL_SOURCE_LABEL[s]}</option>`).join('')}
+        </select>
+        <input type="text" class="form-input" id="rmReplySourceDetail" placeholder="פרטים (מי אמר / איזה מייל / איזו שנה...)" value="${rmEscapeHtml(approvalSourceDetail)}" style="margin-top:6px"/>
+      </div>` : ''}
+    <div class="form-group">
+      <label class="form-label">הערות</label>
+      <textarea class="form-input" id="rmReplyNotes" rows="3">${rmEscapeHtml(notes)}</textarea>
+    </div>`;
+}
+
+const RM_APPROVAL_SOURCE_LABEL = { PHONE: 'טלפון', EMAIL: 'מייל', WHATSAPP: 'וואטסאפ', LETTER: 'מכתב', PREVIOUS_YEAR: 'שנה קודמת', BODY_LIST: 'רשימת גוף', OTHER: 'אחר' };
+
+async function rmReplySubmit() {
+  const included = Object.entries(RM_REPLY.tracks).filter(([, t]) => t.included);
+  if (!included.length) { showToast('נא לבחור מסלול אחד לפחות'); return; }
+
+  const file = document.getElementById('rmReplyFile').files[0];
+  const replyAt = document.getElementById('rmReplyDate').value;
+  const notes = document.getElementById('rmReplyNotes').value.trim();
+  const sourceEl = document.getElementById('rmReplySource');
+  const approvalSource = sourceEl ? sourceEl.value : undefined;
+  const approvalSourceDetailEl = document.getElementById('rmReplySourceDetail');
+  const approvalSourceDetail = approvalSourceDetailEl ? approvalSourceDetailEl.value.trim() : undefined;
+
+  const [primaryTrack, primary] = included[0];
+  const also = included[1]; // [track, data] or undefined
+
+  const fd = new FormData();
+  if (file) fd.append('file', file);
+  fd.append('status', primary.status);
+  if (replyAt) fd.append('replyAt', replyAt);
+  if (notes) fd.append('notes', notes);
+  if (primaryTrack === 'YEAR_ROUND') {
+    const ct = document.getElementById('rmReplyCondition');
+    if (ct && ct.value.trim()) fd.append('conditionText', ct.value.trim());
+  } else {
+    const sy = document.getElementById('rmReplySeasonYear');
+    if (sy && sy.value.trim()) fd.append('seasonYear', sy.value.trim());
+  }
+  if (!file) {
+    if (!approvalSource) { showToast('נא לבחור מקור לאישור כשאין קובץ'); return; }
+    fd.append('approvalSource', approvalSource);
+    if (approvalSourceDetail) fd.append('approvalSourceDetail', approvalSourceDetail);
+  }
+  if (also) {
+    const [alsoTrack, alsoData] = also;
+    fd.append('alsoApprovalId', String(alsoData.approvalId));
+    fd.append('alsoStatus', alsoData.status);
+    if (alsoTrack === 'YEAR_ROUND') {
+      const ct = document.getElementById('rmReplyCondition');
+      if (ct && ct.value.trim()) fd.append('alsoConditionText', ct.value.trim());
+    } else {
+      const sy = document.getElementById('rmReplySeasonYear');
+      if (sy && sy.value.trim()) fd.append('alsoSeasonYear', sy.value.trim());
+    }
+  }
+
+  const btn = document.getElementById('rmReplySubmitBtn');
+  btn.disabled = true;
+  try {
+    // raw fetch, not apiFetch -- apiFetch forces Content-Type: application/json,
+    // which would break this multipart FormData body (no boundary set)
+    const res = await fetch(API + '/api/approvals/' + primary.approvalId + '/reply', { method: 'POST', headers: authHeaders(), body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'שגיאה בשמירת התשובה');
+    showToast('התשובה נשמרה');
+    document.getElementById('rmReplyModal').classList.remove('open');
+    await rmLoadCard();
+  } catch (e) {
+    document.getElementById('rmReplyAlert').innerHTML = `<div class="alert alert-error">${rmEscapeHtml(e.message)}</div>`;
+  }
+  btn.disabled = false;
 }
