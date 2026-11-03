@@ -748,7 +748,10 @@ function resolveKashrutBodyName(ref) {
 }
 
 function kashrutBodyOut(b) {
-  return { id: b.id, name: b.name, shortName: b.shortName || '', active: b.active };
+  return {
+    id: b.id, name: b.name, shortName: b.shortName || '', active: b.active,
+    handlesPassover: b.handlesPassover, sortOrder: b.sortOrder,
+  };
 }
 
 function regDocOut(rd) {
@@ -762,8 +765,10 @@ function regApprovalOut(a) {
   return {
     id: a.id, rawMaterialId: a.rawMaterialId,
     kashrutBodyId: a.kashrutBodyId, kashrutBodyName: a.kashrutBody ? a.kashrutBody.name : null,
+    handlesPassover: a.kashrutBody ? a.kashrutBody.handlesPassover : false,
     contactId: a.contactId, contactName: a.contact ? a.contact.name : null,
     status: a.status, kashrutLevel: a.kashrutLevel || '',
+    passoverStatus: a.passoverStatus, passoverYear: a.passoverYear || '', passoverNote: a.passoverNote || '',
     sentAt: a.sentAt, sentVia: a.sentVia, sentDocIds: a.sentDocIds || [],
     replyAt: a.replyAt, replyDocId: a.replyDocId,
     conditionText: a.conditionText || '', validUntil: a.validUntil,
@@ -774,7 +779,9 @@ function regApprovalOut(a) {
 function regNotSentPlaceholder(rawMaterialId, body) {
   return {
     id: null, rawMaterialId, kashrutBodyId: body.id, kashrutBodyName: body.name,
+    handlesPassover: body.handlesPassover,
     contactId: null, contactName: null, status: 'NOT_SENT', kashrutLevel: '',
+    passoverStatus: 'NOT_ASKED', passoverYear: '', passoverNote: '',
     sentAt: null, sentVia: null, sentDocIds: [], replyAt: null, replyDocId: null,
     conditionText: '', validUntil: null, notes: '', createdAt: null, updatedAt: null,
   };
@@ -896,7 +903,7 @@ app.get('/api/raw-materials/:id/approvals', requireAssistant, ah(async (req, res
   const rm = await prisma.rawMaterial.findUnique({ where: { id } });
   if (!rm) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
   const [bodies, approvals] = await Promise.all([
-    prisma.kashrutBody.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+    prisma.kashrutBody.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
     prisma.rawMaterialApproval.findMany({ where: { rawMaterialId: id }, include: { kashrutBody: true, contact: true } }),
   ]);
   const byBody = new Map(approvals.map(a => [a.kashrutBodyId, a]));
@@ -911,9 +918,11 @@ app.patch('/api/approvals/:id', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const approval = await prisma.rawMaterialApproval.findUnique({ where: { id } });
   if (!approval) return res.status(404).json({ error: 'רשומת אישור לא נמצאה (חומר גלם שלא נשלח עדיין אין לו רשומה עד שליחה ראשונה)' });
-  const { status, kashrutLevel, conditionText, notes, validUntil } = req.body;
+  const { status, kashrutLevel, conditionText, notes, validUntil, passoverStatus, passoverYear, passoverNote } = req.body;
   const VALID_STATUS = ['NOT_SENT', 'SENT_PENDING', 'APPROVED', 'REJECTED', 'CONDITIONAL'];
   if (status !== undefined && !VALID_STATUS.includes(status)) return res.status(400).json({ error: 'סטטוס לא תקין' });
+  const VALID_PASSOVER = ['NOT_ASKED', 'PASSOVER', 'PASSOVER_KITNIYOT', 'NOT_PASSOVER'];
+  if (passoverStatus !== undefined && !VALID_PASSOVER.includes(passoverStatus)) return res.status(400).json({ error: 'סטטוס פסח לא תקין' });
 
   const updates = { updatedById: req.user.id || null };
   if (status !== undefined) updates.status = status;
@@ -921,19 +930,34 @@ app.patch('/api/approvals/:id', requireAssistant, ah(async (req, res) => {
   if (conditionText !== undefined) updates.conditionText = conditionText || null;
   if (notes !== undefined) updates.notes = notes || null;
   if (validUntil !== undefined) updates.validUntil = validUntil ? new Date(validUntil) : null;
+  if (passoverStatus !== undefined) updates.passoverStatus = passoverStatus;
+  if (passoverYear !== undefined) updates.passoverYear = passoverYear || null;
+  if (passoverNote !== undefined) updates.passoverNote = passoverNote || null;
 
   const updated = await prisma.rawMaterialApproval.update({
     where: { id }, data: updates, include: { kashrutBody: true, contact: true },
   });
-  await prisma.rawMaterialApprovalEvent.create({
-    data: {
-      approvalId: id,
-      type: (status !== undefined && status !== approval.status) ? 'STATUS_CHANGE' : 'NOTE',
-      fromStatus: approval.status, toStatus: status !== undefined ? status : approval.status,
-      payload: { kashrutLevel, conditionText, notes, validUntil },
-      byUserId: req.user.id || null,
-    },
-  });
+  const generalFieldsTouched = [status, kashrutLevel, conditionText, notes, validUntil].some(v => v !== undefined);
+  if (generalFieldsTouched) {
+    await prisma.rawMaterialApprovalEvent.create({
+      data: {
+        approvalId: id,
+        type: (status !== undefined && status !== approval.status) ? 'STATUS_CHANGE' : 'NOTE',
+        fromStatus: approval.status, toStatus: status !== undefined ? status : approval.status,
+        payload: { kashrutLevel, conditionText, notes, validUntil },
+        byUserId: req.user.id || null,
+      },
+    });
+  }
+  if (passoverStatus !== undefined && passoverStatus !== approval.passoverStatus) {
+    await prisma.rawMaterialApprovalEvent.create({
+      data: {
+        approvalId: id, type: 'STATUS_CHANGE',
+        payload: { field: 'passover', from: approval.passoverStatus, to: passoverStatus },
+        byUserId: req.user.id || null,
+      },
+    });
+  }
   res.json(regApprovalOut(updated));
 }));
 
@@ -995,9 +1019,11 @@ app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah
   const id = parseInt(req.params.id);
   const approval = await prisma.rawMaterialApproval.findUnique({ where: { id } });
   if (!approval) return res.status(404).json({ error: 'רשומת אישור לא נמצאה' });
-  const { status, replyAt, conditionText, notes } = req.body;
+  const { status, replyAt, conditionText, notes, passoverStatus, passoverYear, passoverNote } = req.body;
   if (!['APPROVED', 'REJECTED', 'CONDITIONAL'].includes(status))
     return res.status(400).json({ error: 'נא לציין סטטוס תשובה (מאושר / נדחה / מאושר בתנאים)' });
+  const VALID_PASSOVER = ['NOT_ASKED', 'PASSOVER', 'PASSOVER_KITNIYOT', 'NOT_PASSOVER'];
+  if (passoverStatus !== undefined && !VALID_PASSOVER.includes(passoverStatus)) return res.status(400).json({ error: 'סטטוס פסח לא תקין' });
 
   let replyDocId = approval.replyDocId;
   if (req.file) {
@@ -1021,6 +1047,9 @@ app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah
       replyAt: replyAt ? new Date(replyAt) : new Date(),
       conditionText: conditionText !== undefined ? (conditionText || null) : approval.conditionText,
       notes: notes !== undefined ? (notes || null) : approval.notes,
+      ...(passoverStatus !== undefined ? { passoverStatus } : {}),
+      ...(passoverYear !== undefined ? { passoverYear: passoverYear || null } : {}),
+      ...(passoverNote !== undefined ? { passoverNote: passoverNote || null } : {}),
       updatedById: req.user.id || null,
     },
     include: { kashrutBody: true, contact: true },
@@ -1031,6 +1060,15 @@ app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah
       payload: { replyDocId, conditionText, notes }, byUserId: req.user.id || null,
     },
   });
+  if (passoverStatus !== undefined && passoverStatus !== approval.passoverStatus) {
+    await prisma.rawMaterialApprovalEvent.create({
+      data: {
+        approvalId: id, type: 'STATUS_CHANGE',
+        payload: { field: 'passover', from: approval.passoverStatus, to: passoverStatus },
+        byUserId: req.user.id || null,
+      },
+    });
+  }
   res.json(regApprovalOut(updated));
 }));
 
@@ -1085,6 +1123,17 @@ app.post('/api/raw-material-registry/:id/skus', requireAssistant, ah(async (req,
   res.status(201).json({ id: link.id, skuId: sku.code, skuName: sku.name, rawMaterialId: id });
 }));
 
+/* ── unlink a SKU from this raw material. Added for Phase 4 Step 4.2 ("add
+ * or remove" linked SKUs) -- not in the spec's literal Phase 3 bullet list,
+ * same gap-filling category as the POST above. ── */
+app.delete('/api/raw-material-registry/:id/skus/:skuCode', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const sku = await prisma.sku.findUnique({ where: { code: String(req.params.skuCode) } });
+  if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
+  await prisma.skuRawMaterial.deleteMany({ where: { rawMaterialId: id, skuId: sku.id } });
+  res.json({ ok: true });
+}));
+
 /* ── impact view: which SKUs use this raw material ── */
 app.get('/api/raw-materials/:id/skus', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
@@ -1098,7 +1147,7 @@ app.get('/api/raw-materials/:id/skus', requireAssistant, ah(async (req, res) => 
  * spec's explicit Phase 3 bullet list, but the bodies are a fixed seeded
  * set (Phase 1) with no create/edit API here -- just exposing them. ── */
 app.get('/api/kashrut-bodies', requireAssistant, ah(async (req, res) => {
-  const bodies = await prisma.kashrutBody.findMany({ orderBy: { name: 'asc' } });
+  const bodies = await prisma.kashrutBody.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
   res.json(bodies.map(kashrutBodyOut));
 }));
 

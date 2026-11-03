@@ -70,7 +70,10 @@ async function snapshot() {
   check('GET /api/kashrut-bodies returns the 11 seeded bodies', bodies.status === 200 && bodies.body.length === 11, bodies.body);
   const bodyLandau = bodies.body.find(b => b.name === 'הרב לנדא');
   const bodyOU = bodies.body.find(b => b.name === 'OU');
-  check('seeded bodies include הרב לנדא and OU', !!bodyLandau && !!bodyOU);
+  check('seeded bodies include הרב לנדא and OU (OU inactive since 2026-11-03, still exists)', !!bodyLandau && !!bodyOU && bodyOU.active === false);
+  // a second ACTIVE body distinct from bodyLandau for the WhatsApp-send case below -- OU itself is now
+  // intentionally inactive (hidden from the approvals matrix), so it can't be used for that anymore
+  const bodySecond = bodies.body.find(b => b.active && b.name !== bodyLandau.name);
 
   // create
   const name = `TEST-RawMaterial-${Date.now()}`;
@@ -108,6 +111,7 @@ async function snapshot() {
   // approvals matrix before any send -- every active body, all NOT_SENT
   const matrix0 = await api('GET', `/api/raw-materials/${id}/approvals`);
   check('GET approvals matrix returns one row per active body, all NOT_SENT', matrix0.status === 200 && matrix0.body.length === bodies.body.filter(b=>b.active).length && matrix0.body.every(a => a.status === 'NOT_SENT'));
+  check('matrix placeholders carry handlesPassover + default passoverStatus=NOT_ASKED', matrix0.body.every(a => a.passoverStatus === 'NOT_ASKED') && matrix0.body.some(a => a.handlesPassover === true) && matrix0.body.some(a => a.handlesPassover === false), matrix0.body.map(a=>[a.kashrutBodyName,a.handlesPassover,a.passoverStatus]));
 
   // send via EMAIL with recordOnly=true -- must NOT send a real email, just record
   const sendEmail = await api('POST', `/api/raw-materials/${id}/send`, {
@@ -118,13 +122,13 @@ async function snapshot() {
 
   // send via WHATSAPP with recordOnly=true (the only mode allowed for WhatsApp)
   const sendWhatsapp = await api('POST', `/api/raw-materials/${id}/send`, {
-    kashrutBodyId: bodyOU.id, docIds: [anyDoc.id], via: 'WHATSAPP', recordOnly: true,
+    kashrutBodyId: bodySecond.id, docIds: [anyDoc.id], via: 'WHATSAPP', recordOnly: true,
   });
   check('POST send WHATSAPP recordOnly=true records SENT_PENDING', sendWhatsapp.status === 200 && sendWhatsapp.body.sentVia === 'WHATSAPP');
 
   // guard: WHATSAPP without recordOnly must be rejected (no server-side WhatsApp API exists)
   const sendWhatsappNoRecord = await api('POST', `/api/raw-materials/${id}/send`, {
-    kashrutBodyId: bodyOU.id, docIds: [anyDoc.id], via: 'WHATSAPP',
+    kashrutBodyId: bodySecond.id, docIds: [anyDoc.id], via: 'WHATSAPP',
   });
   check('POST send WHATSAPP without recordOnly is rejected (400)', sendWhatsappNoRecord.status === 400);
 
@@ -139,20 +143,33 @@ async function snapshot() {
   });
   check('PATCH approval sets CONDITIONAL + conditionText', patchApproval.status === 200 && patchApproval.body.status === 'CONDITIONAL' && patchApproval.body.conditionText === 'TEST: בתנאי שיצרפו ניתוח מעבדה', patchApproval.body);
 
-  // reply: upload a reply file, close out as APPROVED -- also creates a new
-  // Document row, captured for explicit cleanup below
+  // passover fields via PATCH -- backend doesn't gate this by handlesPassover
+  // (that's a UI-only concern), so any approval accepts it
+  const patchPassover = await api('PATCH', `/api/approvals/${approvalId}`, {
+    passoverStatus: 'PASSOVER', passoverYear: 'תשפ"ז', passoverNote: 'TEST',
+  });
+  check('PATCH sets passoverStatus/passoverYear/passoverNote', patchPassover.status === 200 && patchPassover.body.passoverStatus === 'PASSOVER' && patchPassover.body.passoverYear === 'תשפ"ז', patchPassover.body);
+  const eventsSoFar = await prisma.rawMaterialApprovalEvent.findMany({ where: { approvalId } });
+  const passoverEventsAfterPatch = eventsSoFar.filter(e => e.payload && e.payload.field === 'passover').length;
+  check('PATCH passover change wrote its own STATUS_CHANGE event with payload.field=passover', passoverEventsAfterPatch >= 1, passoverEventsAfterPatch);
+
+  // reply: upload a reply file, close out as APPROVED (and also set
+  // passoverStatus in the same call) -- also creates a new Document row,
+  // captured for explicit cleanup below
   const fd2 = new FormData();
   fd2.append('file', new Blob(['dummy reply pdf content'], { type: 'application/pdf' }), 'reply-test.pdf');
   fd2.append('name', 'TEST-reply-doc');
   fd2.append('status', 'APPROVED');
   fd2.append('notes', 'TEST: אושר בבדיקה');
+  fd2.append('passoverStatus', 'PASSOVER_KITNIYOT');
   const reply = await api('POST', `/api/approvals/${approvalId}/reply`, fd2, true);
   check('POST reply sets status=APPROVED with a replyDocId', reply.status === 200 && reply.body.status === 'APPROVED' && !!reply.body.replyDocId, reply.body);
+  check('POST reply also sets passoverStatus in the same call', reply.body.passoverStatus === 'PASSOVER_KITNIYOT', reply.body);
   const replyDocId = reply.body && reply.body.replyDocId;
 
-  // event log actually grew (patch + 2 sends + reply all write events)
+  // event log actually grew (patch + passover-patch + 2 sends + reply + reply-passover all write events)
   const events = await prisma.rawMaterialApprovalEvent.count({ where: { approvalId } });
-  check('RawMaterialApprovalEvent rows were written for this approval (>=3)', events >= 3, events);
+  check('RawMaterialApprovalEvent rows were written for this approval (>=5)', events >= 5, events);
 
   // link to a SKU (real SKU, not a test artifact -- just a link), then verify both read views
   const anySku = await prisma.sku.findFirst({ orderBy: { id: 'asc' } });

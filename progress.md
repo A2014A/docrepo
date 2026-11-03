@@ -192,3 +192,75 @@ Per spec, Hebrew/RTL, mobile-friendly PWA:
 
 Phase 5 (explicitly deferred per spec, not for now): automatic reply
 detection from Gmail, reminders for requests pending >N days.
+
+## Phase 4 — Screens (in progress, per `docrepo-phase4-spec.md`)
+
+All committed on branch `raw-materials-registry` (not main, not pushed, not
+deployed).
+
+### Step 4.1 — registry list screen (done)
+- `public/raw-materials.js` (new, self-injects its own `<style>` and markup
+  at runtime) + a 4-line `index.html` edit (nav button, empty container
+  div, script tag). Entirely client-side against the Phase 3 API.
+- Search (name/supplier/manufacturer/SKU), filters (kashrut body, status,
+  supplier, "לבדוק", stale-pending-days), summary counters, per-row
+  status-dot strip with a column legend above it (`KashrutBody.shortName`).
+- Fixed after review: legend header aligned to dot columns via a shared
+  CSS-grid template; summary counters got a space + switched to the
+  codebase's `"` convention instead of `״`.
+
+### Pre-4.2 change — inactive bodies + Pesach fields (done, additive)
+Backed up all 17 tables first (`backups/2026-11-03T10-24-30-121Z/`).
+Schema additions via `prisma db push` (no data loss, verified clean):
+- `KashrutBody.handlesPassover Boolean @default(false)`,
+  `KashrutBody.sortOrder Int @default(100)`.
+- `RawMaterialApproval.passoverStatus` (new enum `PassoverStatus`:
+  `NOT_ASKED|PASSOVER|PASSOVER_KITNIYOT|NOT_PASSOVER`, default `NOT_ASKED`),
+  `.passoverYear String?`, `.passoverNote String?`.
+
+Data (via updated `prisma/seed-kashrut-bodies.js`, idempotent):
+- `active=false` for אגודה, OU, הרבנות הראשית (not deleted — existing
+  approval rows pointing at them are untouched, just hidden from the
+  active-only matrix/legend/dots/filters; reactivatable by flipping the flag).
+- `handlesPassover=true` for בית יוסף, חתם סופר ב"ב, הרב מחפוד,
+  מחזיקי הדת בעלז.
+- `sortOrder`: בית יוסף=1, חתם סופר ב"ב=2, everyone else=100 (tie-broken by
+  name) — puts those two first in the legend/dots/pickers.
+
+API (`server.js`): `kashrutBodyOut`/`regApprovalOut`/`regNotSentPlaceholder`
+now carry `handlesPassover`/`sortOrder`/`passoverStatus`/`passoverYear`/
+`passoverNote`; `GET /api/kashrut-bodies` and the approvals-matrix query
+both order by `sortOrder` then `name`. `PATCH /api/approvals/:id` and
+`POST /api/approvals/:id/reply` both accept the three passover fields now,
+each writing its own `STATUS_CHANGE` event with
+`payload:{field:'passover', from, to}` — separate from the existing
+general status/reply event, and only when the passover value actually
+changes (also fixed a pre-existing quirk where the general PATCH event
+fired even when nothing in it changed; now guarded).
+
+Frontend (`raw-materials.js`, Step 4.1 screen only so far): inactive bodies
+already disappear automatically (client already filtered `b.active`);
+small "פ" badge on the dot for `handlesPassover` bodies, colored by
+`passoverStatus` (green/orange/red, no badge for `NOT_ASKED`), folded into
+the existing tooltip; new filter "מאושר לפסח (גוף)" (pick one
+Pesach-handling body, show only materials that body marked fully
+`PASSOVER` for). Step 4.2 card and the future 4.4 reply modal still need to
+surface these fields for `handlesPassover` bodies — not built yet.
+
+Also added (small, in the same "necessary gap-filling" category as the two
+flagged in Phase 3, done while starting on 4.2 before this interrupted it):
+`DELETE /api/raw-material-registry/:id/skus/:skuCode` (spec's "add or
+remove" linked SKUs had no remove endpoint yet).
+
+Regression: `prisma/test-raw-material-registry-api.js` extended with
+passover-specific checks (matrix placeholder defaults, PATCH, reply) and
+fixed to use an active body instead of the now-inactive OU for its WhatsApp
+case. **28/28 passing**, self-cleanup independently re-verified (row counts
+before/after match across all touched tables).
+
+### Still to do in Step 4.2 (card screen) — not started
+Header+edit, documents gallery by role, approvals table (now needs a
+Pesach sub-row/columns for `handlesPassover` bodies), linked-SKU add/remove
+UI (reusing `openSkuPicker` with one new mode), and a `GET
+/api/approvals/:id/events` read endpoint for the "היסטוריה" button (doesn't
+exist yet — writes exist, no read).

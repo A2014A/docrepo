@@ -10,6 +10,8 @@ const prisma = new PrismaClient();
 const TABLES = [
   'user', 'customer', 'category', 'sku', 'rabbinateCert', 'badatzDoc',
   'document', 'skuLink', 'certRequest', 'syncState', 'contact',
+  'kashrutBody', 'rawMaterial', 'rawMaterialDocument', 'rawMaterialApproval',
+  'rawMaterialApprovalEvent', 'skuRawMaterial',
 ];
 
 (async () => {

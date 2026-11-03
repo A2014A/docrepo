@@ -74,6 +74,15 @@ enum RawMaterialEventType {
   NOTE
 }
 
+// Pesach approval lives as fields on the same RawMaterialApproval row, not
+// a separate kashrut body -- only bodies with handlesPassover=true use this.
+enum PassoverStatus {
+  NOT_ASKED
+  PASSOVER
+  PASSOVER_KITNIYOT
+  NOT_PASSOVER
+}
+
 model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
@@ -262,6 +271,8 @@ model KashrutBody {
   name             String   @unique
   shortName        String?
   active           Boolean  @default(true)
+  handlesPassover  Boolean  @default(false)
+  sortOrder        Int      @default(100)
   defaultContactId Int?
   defaultContact   Contact? @relation("KashrutBodyDefaultContact", fields: [defaultContactId], references: [id])
   createdAt        DateTime @default(now())
@@ -309,6 +320,9 @@ model RawMaterialApproval {
   contact       Contact?                  @relation(fields: [contactId], references: [id])
   status        RawMaterialApprovalStatus @default(NOT_SENT)
   kashrutLevel  String?
+  passoverStatus PassoverStatus           @default(NOT_ASKED)
+  passoverYear  String?
+  passoverNote  String?
   sentAt        DateTime?
   sentVia       RequestChannel?
   sentDocIds    Json?

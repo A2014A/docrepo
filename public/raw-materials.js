@@ -19,6 +19,12 @@ const RM_STATUS_COLOR = {
   NOT_SENT: '#A09D98', SENT_PENDING: '#f59e0b', APPROVED: '#2D5A3D',
   REJECTED: '#dc2626', CONDITIONAL: '#2563eb',
 };
+const RM_PASSOVER_LABEL = {
+  NOT_ASKED: 'לא נשאל', PASSOVER: 'כשר לפסח', PASSOVER_KITNIYOT: 'כשר לפסח (קטניות)', NOT_PASSOVER: 'לא כשר לפסח',
+};
+const RM_PASSOVER_COLOR = {
+  PASSOVER: '#2D5A3D', PASSOVER_KITNIYOT: '#f59e0b', NOT_PASSOVER: '#dc2626',
+};
 
 const RM_STATE = { items: [], bodies: [], loaded: false };
 
@@ -54,7 +60,9 @@ function rmInjectStyles() {
 .rm-dots-grid{display:grid;gap:4px;}
 .rm-legend-label{font-size:.62rem;color:var(--ink3);text-align:center;line-height:1.15;word-break:break-word;}
 .rm-dot-cell{display:flex;justify-content:center;}
-.rm-dot{width:12px;height:12px;border-radius:50%;display:inline-block;cursor:default;}
+.rm-dot-wrap{position:relative;width:14px;height:14px;}
+.rm-dot{width:14px;height:14px;border-radius:50%;display:block;cursor:default;}
+.rm-passover-badge{position:absolute;bottom:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:#fff;border:1px solid var(--border2);font-size:7px;font-weight:800;line-height:9px;text-align:center;cursor:default;}
 .rm-empty{text-align:center;padding:3rem;color:var(--ink3);}
 `;
   document.head.appendChild(style);
@@ -82,6 +90,7 @@ function rmBuildPageShell() {
         <option value="CONDITIONAL">מאושר בתנאים</option>
       </select>
       <select id="rmSupplierFilter" onchange="rmApplyFilters()"></select>
+      <select id="rmPassoverFilter" onchange="rmApplyFilters()"></select>
       <label><input type="checkbox" id="rmNeedsReviewFilter" onchange="rmApplyFilters()"/> ⚠ לבדוק בלבד</label>
       <label><input type="checkbox" id="rmStaleToggle" onchange="rmApplyFilters()"/> ⏳ ממתין מעל
         <input type="number" id="rmStaleDays" value="14" min="1" onchange="rmApplyFilters()"/> ימים</label>
@@ -135,6 +144,11 @@ function rmPopulateFilterOptions() {
   const supplierSel = document.getElementById('rmSupplierFilter');
   supplierSel.innerHTML = '<option value="">כל הספקים</option>' +
     suppliers.map(s => `<option value="${rmEscapeHtml(s)}">${rmEscapeHtml(s)}</option>`).join('');
+
+  const passoverBodies = RM_STATE.bodies.filter(b => b.handlesPassover);
+  const passoverSel = document.getElementById('rmPassoverFilter');
+  passoverSel.innerHTML = '<option value="">מאושר לפסח (גוף)</option>' +
+    passoverBodies.map(b => `<option value="${b.id}">מאושר לפסח: ${rmEscapeHtml(b.shortName || b.name)}</option>`).join('');
 }
 
 // one status per active kashrut body for this material -- a real
@@ -145,7 +159,9 @@ function rmStatusByBody(item) {
   const byBody = new Map(item.approvals.map(a => [a.kashrutBodyId, a]));
   return RM_STATE.bodies.map(b => {
     const a = byBody.get(b.id);
-    return a ? { body: b, status: a.status, sentAt: a.sentAt } : { body: b, status: 'NOT_SENT', sentAt: null };
+    return a
+      ? { body: b, status: a.status, sentAt: a.sentAt, passoverStatus: a.passoverStatus, passoverYear: a.passoverYear }
+      : { body: b, status: 'NOT_SENT', sentAt: null, passoverStatus: 'NOT_ASKED', passoverYear: '' };
   });
 }
 
@@ -174,6 +190,7 @@ function rmApplyFilters() {
   const bodyId = document.getElementById('rmBodyFilter').value;
   const status = document.getElementById('rmStatusFilter').value;
   const supplier = document.getElementById('rmSupplierFilter').value;
+  const passoverBodyId = document.getElementById('rmPassoverFilter').value;
   const needsReviewOnly = document.getElementById('rmNeedsReviewFilter').checked;
   const staleOn = document.getElementById('rmStaleToggle').checked;
   const staleDays = parseInt(document.getElementById('rmStaleDays').value) || 14;
@@ -184,6 +201,10 @@ function rmApplyFilters() {
     const needsReview = item.approvals.length === 0;
     if (needsReviewOnly && !needsReview) return false;
     if (supplier && item.supplier !== supplier) return false;
+    if (passoverBodyId) {
+      const s = statuses.find(s => s.body.id === parseInt(passoverBodyId));
+      if (!s || s.passoverStatus !== 'PASSOVER') return false;
+    }
 
     if (q) {
       const hay = [item.name, item.supplier, item.manufacturer, ...item.skus.map(s => s.id + ' ' + s.name)]
@@ -231,8 +252,12 @@ function rmRenderList(rows) {
     const skuText = item.skus.length ? item.skus.map(s => rmEscapeHtml(s.id)).join(', ') : 'אין מק"טים מקושרים';
     const dots = statuses.map(s => {
       const days = s.status === 'SENT_PENDING' ? rmDaysSince(s.sentAt) : null;
-      const title = `${s.body.name}: ${RM_STATUS_LABEL[s.status]}${days != null ? ` (${days} ימים)` : ''}`;
-      return `<div class="rm-dot-cell"><span class="rm-dot" style="background:${RM_STATUS_COLOR[s.status]}" title="${rmEscapeHtml(title)}"></span></div>`;
+      const passoverLine = s.body.handlesPassover
+        ? `\nפסח: ${RM_PASSOVER_LABEL[s.passoverStatus]}${s.passoverYear ? ' (' + s.passoverYear + ')' : ''}` : '';
+      const title = `${s.body.name}: ${RM_STATUS_LABEL[s.status]}${days != null ? ` (${days} ימים)` : ''}${passoverLine}`;
+      const badge = (s.body.handlesPassover && s.passoverStatus !== 'NOT_ASKED')
+        ? `<span class="rm-passover-badge" style="color:${RM_PASSOVER_COLOR[s.passoverStatus]}" title="${rmEscapeHtml(title)}">פ</span>` : '';
+      return `<div class="rm-dot-cell"><span class="rm-dot-wrap"><span class="rm-dot" style="background:${RM_STATUS_COLOR[s.status]}" title="${rmEscapeHtml(title)}"></span>${badge}</span></div>`;
     }).join('');
     return `
       <div class="rm-row">
