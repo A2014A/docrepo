@@ -776,7 +776,7 @@ function regApprovalOut(a) {
     replyAt: a.replyAt, replyDocId: a.replyDocId,
     conditionText: a.conditionText || '', validUntil: a.validUntil,
     approvalSource: a.approvalSource, approvalSourceDetail: a.approvalSourceDetail || '',
-    notes: a.notes || '', createdAt: a.createdAt, updatedAt: a.updatedAt,
+    notes: a.notes || '', createdAt: a.createdAt, updatedAt: a.updatedAt, viaOrigin: false,
   };
 }
 
@@ -787,7 +787,22 @@ function regNotSentPlaceholder(rawMaterialId, body, track) {
     contactId: null, contactName: null, status: 'NOT_SENT', kashrutLevel: '',
     sentAt: null, sentVia: null, sentDocIds: [], replyAt: null, replyDocId: null,
     conditionText: '', validUntil: null, approvalSource: null, approvalSourceDetail: '',
-    notes: '', createdAt: null, updatedAt: null,
+    notes: '', createdAt: null, updatedAt: null, viaOrigin: false,
+  };
+}
+
+// R1 follow-up (3.11.2026): a body that's the raw material's origin kashrut
+// body is shown as already approved -- computed here, never written to the
+// DB, and only ever used in place of a NOT_SENT placeholder (a real
+// approval row, whatever its status, always wins over this).
+function regComputedOriginApproval(rawMaterialId, body, track, status) {
+  return {
+    id: null, rawMaterialId, kashrutBodyId: body.id, kashrutBodyName: body.name,
+    handlesPassover: body.handlesPassover, track, seasonYear: '',
+    contactId: null, contactName: null, status, kashrutLevel: '',
+    sentAt: null, sentVia: null, sentDocIds: [], replyAt: null, replyDocId: null,
+    conditionText: '', validUntil: null, approvalSource: null, approvalSourceDetail: '',
+    notes: '', createdAt: null, updatedAt: null, viaOrigin: true,
   };
 }
 
@@ -813,6 +828,8 @@ function regMaterialOut(rm, extra) {
     originKashrutBodyName: rm.originKashrutBody ? rm.originKashrutBody.name : null,
     originCertDocId: rm.originCertDocId, originCertValidUntil: rm.originCertValidUntil,
     originHasCert: rm.originHasCert,
+    originPassoverStatus: rm.originPassoverStatus, originPassoverText: rm.originPassoverText || '',
+    originPassoverCertDocId: rm.originPassoverCertDocId, originPassoverValidUntil: rm.originPassoverValidUntil,
     createdAt: rm.createdAt, updatedAt: rm.updatedAt,
     documents: documents.map(regDocOut),
     approvals: approvals.map(regApprovalOut),
@@ -856,13 +873,32 @@ app.get('/api/raw-material-registry/:id', requireAssistant, ah(async (req, res) 
 
 app.patch('/api/raw-material-registry/:id', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
-  const { name, supplier, manufacturer, notes, defaultDocId } = req.body;
+  const {
+    name, supplier, manufacturer, notes, defaultDocId,
+    originKashrutText, originKashrutBodyId, originCertDocId, originCertValidUntil, originHasCert,
+    originPassoverStatus, originPassoverText, originPassoverCertDocId, originPassoverValidUntil,
+  } = req.body;
+  if (originPassoverStatus !== undefined && !['UNKNOWN', 'PASSOVER', 'PASSOVER_KITNIYOT', 'NOT_PASSOVER'].includes(originPassoverStatus))
+    return res.status(400).json({ error: 'סטטוס פסח במקור לא תקין' });
+
   const updates = {};
   if (name !== undefined) updates.name = name;
   if (supplier !== undefined) updates.supplier = supplier || null;
   if (manufacturer !== undefined) updates.manufacturer = manufacturer || null;
   if (notes !== undefined) updates.notes = notes || null;
   if (defaultDocId !== undefined) updates.defaultDocId = defaultDocId ? parseInt(defaultDocId) : null;
+  // כשרות המקור -- ימות השנה
+  if (originKashrutText !== undefined) updates.originKashrutText = originKashrutText || null;
+  if (originKashrutBodyId !== undefined) updates.originKashrutBodyId = originKashrutBodyId ? parseInt(originKashrutBodyId) : null;
+  if (originCertDocId !== undefined) updates.originCertDocId = originCertDocId ? parseInt(originCertDocId) : null;
+  if (originCertValidUntil !== undefined) updates.originCertValidUntil = originCertValidUntil ? new Date(originCertValidUntil) : null;
+  if (originHasCert !== undefined) updates.originHasCert = !!originHasCert;
+  // כשרות המקור -- פסח
+  if (originPassoverStatus !== undefined) updates.originPassoverStatus = originPassoverStatus;
+  if (originPassoverText !== undefined) updates.originPassoverText = originPassoverText || null;
+  if (originPassoverCertDocId !== undefined) updates.originPassoverCertDocId = originPassoverCertDocId ? parseInt(originPassoverCertDocId) : null;
+  if (originPassoverValidUntil !== undefined) updates.originPassoverValidUntil = originPassoverValidUntil ? new Date(originPassoverValidUntil) : null;
+
   const rm = await prisma.rawMaterial.update({ where: { id }, data: updates, include: REG_INCLUDE }).catch(() => null);
   if (!rm) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
   res.json(regMaterialOut(rm, rm));
@@ -963,10 +999,16 @@ app.get('/api/raw-materials/:id/approvals', requireAssistant, ah(async (req, res
   const rows = [];
   for (const b of bodies) {
     const yr = byKey.get(`${b.id}|YEAR_ROUND`);
-    rows.push(yr ? regApprovalOut(yr) : regNotSentPlaceholder(id, b, 'YEAR_ROUND'));
+    if (yr) rows.push(regApprovalOut(yr));
+    else if (rm.originKashrutBodyId === b.id) rows.push(regComputedOriginApproval(id, b, 'YEAR_ROUND', 'APPROVED'));
+    else rows.push(regNotSentPlaceholder(id, b, 'YEAR_ROUND'));
+
     if (b.handlesPassover) {
       const ps = byKey.get(`${b.id}|PASSOVER`);
-      rows.push(ps ? regApprovalOut(ps) : regNotSentPlaceholder(id, b, 'PASSOVER'));
+      if (ps) rows.push(regApprovalOut(ps));
+      else if (rm.originKashrutBodyId === b.id && ['PASSOVER', 'PASSOVER_KITNIYOT'].includes(rm.originPassoverStatus))
+        rows.push(regComputedOriginApproval(id, b, 'PASSOVER', rm.originPassoverStatus === 'PASSOVER' ? 'APPROVED' : 'APPROVED_KITNIYOT'));
+      else rows.push(regNotSentPlaceholder(id, b, 'PASSOVER'));
     }
   }
   const shownIds = new Set(rows.map(r => r.id).filter(idv => idv != null));

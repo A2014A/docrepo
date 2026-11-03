@@ -122,6 +122,24 @@ async function snapshot() {
   check('matrix row count = active bodies + passover-handling active bodies', matrix0.status === 200 && matrix0.body.length === expectedMatrixRows, { got: matrix0.body.length, expected: expectedMatrixRows });
   check('matrix rows all NOT_SENT with a track, no approvalSource yet', matrix0.body.every(a => a.status === 'NOT_SENT' && ['YEAR_ROUND', 'PASSOVER'].includes(a.track) && a.approvalSource == null));
   check('matrix includes a PASSOVER row only for handlesPassover bodies', matrix0.body.filter(a => a.track === 'PASSOVER').length === passoverBodies.length);
+  check('matrix rows start with viaOrigin:false (no origin set yet)', matrix0.body.every(a => a.viaOrigin === false));
+
+  // ── R1 follow-up: origin-kashrut fields + computed-origin-approval
+  // (bodyPassover chosen as the origin body since it handlesPassover --
+  // untouched by any send up to this point, so its computed rows are
+  // visible before being overridden by a real send further down) ──
+  const originPatch = await api('PATCH', `/api/raw-material-registry/${id}`, {
+    originKashrutBodyId: bodyPassover.id, originKashrutText: 'TEST-OU', originHasCert: false,
+    originPassoverStatus: 'PASSOVER_KITNIYOT', originPassoverText: 'TEST-OU-P',
+  });
+  check('PATCH sets origin-kashrut + origin-Passover fields', originPatch.status === 200 && originPatch.body.originKashrutBodyId === bodyPassover.id && originPatch.body.originPassoverStatus === 'PASSOVER_KITNIYOT' && originPatch.body.originPassoverText === 'TEST-OU-P', originPatch.body);
+
+  const matrixOrigin = await api('GET', `/api/raw-materials/${id}/approvals`);
+  const originYearRow = matrixOrigin.body.find(a => a.kashrutBodyId === bodyPassover.id && a.track === 'YEAR_ROUND');
+  const originPassoverRow = matrixOrigin.body.find(a => a.kashrutBodyId === bodyPassover.id && a.track === 'PASSOVER');
+  check('origin body YEAR_ROUND row computed as APPROVED/viaOrigin (no real row yet)', originYearRow && originYearRow.status === 'APPROVED' && originYearRow.viaOrigin === true, originYearRow);
+  check('origin body PASSOVER row computed as APPROVED_KITNIYOT/viaOrigin (origin status was PASSOVER_KITNIYOT)', originPassoverRow && originPassoverRow.status === 'APPROVED_KITNIYOT' && originPassoverRow.viaOrigin === true, originPassoverRow);
+  check('other bodies are unaffected by the origin computation (still real NOT_SENT)', matrixOrigin.body.filter(a => a.kashrutBodyId !== bodyPassover.id).every(a => a.status === 'NOT_SENT' && a.viaOrigin === false));
 
   // old single-body send shape still works (kashrutBodyId + contactId) --
   // defaults to track=YEAR_ROUND
@@ -152,6 +170,8 @@ async function snapshot() {
   const matrix1 = await api('GET', `/api/raw-materials/${id}/approvals`);
   const sentCount = matrix1.body.filter(a => a.status === 'SENT_PENDING').length;
   check('matrix reflects 6 SENT_PENDING after single-sends (2) + multi-send (4)', sentCount === 6, matrix1.body.map(a => [a.kashrutBodyName, a.track, a.status]));
+  const bodyPassoverRowsNow = matrix1.body.filter(a => a.kashrutBodyId === bodyPassover.id);
+  check('a real send on the origin body replaces the computed-origin row (no longer viaOrigin)', bodyPassoverRowsNow.every(a => a.status === 'SENT_PENDING' && a.viaOrigin === false), bodyPassoverRowsNow);
 
   // ── track-specific status validation (R1: CONDITIONAL only YEAR_ROUND,
   // APPROVED_KITNIYOT only PASSOVER) ──

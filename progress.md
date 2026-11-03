@@ -380,8 +380,54 @@ real data (7 raw materials, currently all `YEAR_ROUND` only — nothing's
 been sent for Passover yet in production data) shapes correctly for the
 new UI. Local server left running for manual browser verification.
 
-### Next (per the spec's order of work) — not started
-R4 (card screen) → R5 (send modal) → R6 (reply modal) → R10 (Excel export)
-→ R11 (Excel import) → R12 (bulk send) → R7 (add-material flow) → R8 (SKU
-tab) → R9 (contacts/bodies settings), stopping after each with a
-browser-checkable summary.
+### R1 follow-up — origin-Passover fields + computed-origin-approval (done)
+Added directly to `docrepo-phase4-v2-tracks.md` on disk (not via chat) while
+R3 was in progress; folded in as instructed. Backed up first
+(`backups/2026-11-03T11-54-44-663Z/`).
+- **Schema** (additive, no warning — nullable/defaulted): `RawMaterial`
+  gains `originPassoverStatus` (new enum `OriginPassoverStatus:
+  UNKNOWN|PASSOVER|PASSOVER_KITNIYOT|NOT_PASSOVER`, default `UNKNOWN`),
+  `originPassoverText`, `originPassoverCertDocId` → `Document`,
+  `originPassoverValidUntil`.
+- **API**: `PATCH /api/raw-material-registry/:id` — discovered it didn't
+  accept *any* origin fields yet (not even the year-round ones from R1/R2),
+  so extended it for both sets now (R4's card will need this). Matrix
+  endpoint (`GET /api/raw-materials/:id/approvals`) computes the
+  "approved via origin" row: if `originKashrutBodyId` matches a body with
+  no real approval row yet, that body's `YEAR_ROUND` row shows `APPROVED`;
+  its `PASSOVER` row (if it `handlesPassover`) shows `APPROVED`/
+  `APPROVED_KITNIYOT` when `originPassoverStatus` is `PASSOVER`/
+  `PASSOVER_KITNIYOT`. **Never stored, never overrides a real row** — the
+  moment a real `RawMaterialApproval` exists for that body+track, it wins.
+  All approval objects (real, `NOT_SENT` placeholder, computed) now carry
+  `viaOrigin: true/false` so the UI can distinguish them.
+- **Regression**: 6 new checks (computed YEAR_ROUND/PASSOVER rows, other
+  bodies unaffected, real send overriding the computed row).
+  **46/46 passing**, self-cleanup re-verified.
+
+### R3 fixes (done, requested alongside the R1 follow-up)
+- **Legend centering**: `.rm-dots-grid` now sets `justify-items:center`
+  directly (was relying on a flex wrapper per dot-cell, which could drift
+  from the legend's plain `text-align:center`) — both dots and legend
+  labels now center identically within the same grid columns.
+- **Color key line**: a row of small colored dots + labels under the
+  counters, track-aware (shows the 6 statuses valid for the current track).
+
+### R1-follow-up UI (list screen)
+- New fixed-width "מקור" column before the dots (not a sub-line anymore):
+  year-round shows hechsher text + cert expiry; Passover view shows the
+  Passover marking, colored by `originPassoverStatus` (green/yellow
+  kitniyot/red/gray unknown). Legend gained a matching "מקור" header.
+- New "כשר לפסח במקור" filter checkbox.
+- Small "מ" badge on any dot that's `viaOrigin` (distinct from, and not to
+  be confused with, the removed "פ" badge from the superseded single-row
+  Passover attempt — this one marks a *computed* status, not a stored one).
+
+Queued for later, not built now: R10's export needs all the origin fields
+(including these Passover ones) in its columns — noted for when R10 comes up.
+
+### Next (per the spec's order of work)
+R4 (card screen) — starting now → R5 (send modal) → R6 (reply modal) → R10
+(Excel export) → R11 (Excel import) → R12 (bulk send) → R7 (add-material
+flow) → R8 (SKU tab) → R9 (contacts/bodies settings), stopping after each
+with a browser-checkable summary.

@@ -88,6 +88,14 @@ enum ApprovalSource {
   OTHER
 }
 
+// RawMaterial.originPassoverStatus -- R1 follow-up, added 3.11.2026.
+enum OriginPassoverStatus {
+  UNKNOWN
+  PASSOVER
+  PASSOVER_KITNIYOT
+  NOT_PASSOVER
+}
+
 enum RawMaterialEventType {
   SENT
   REPLY
@@ -219,6 +227,7 @@ model Document {
   rawMaterialDefaultFor  RawMaterial[]           @relation("RawMaterialDefaultDoc")
   rawMaterialReplyFor    RawMaterialApproval[]   @relation("RawMaterialApprovalReplyDoc")
   rawMaterialOriginCertFor RawMaterial[]         @relation("RawMaterialOriginCertDoc")
+  rawMaterialOriginPassoverCertFor RawMaterial[] @relation("RawMaterialOriginPassoverCertDoc")
 }
 
 model SkuLink {
@@ -329,6 +338,15 @@ model RawMaterial {
   originCertDoc        Document?    @relation("RawMaterialOriginCertDoc", fields: [originCertDocId], references: [id])
   originCertValidUntil DateTime?
   originHasCert        Boolean      @default(false)
+
+  // origin Passover marking (R1 follow-up, added 3.11.2026) -- a separate
+  // status from originKashrutBody above: the same origin body's label may
+  // say "PASSOVER" or "PASSOVER_KITNIYOT" for Pesach specifically
+  originPassoverStatus     OriginPassoverStatus @default(UNKNOWN)
+  originPassoverText       String?
+  originPassoverCertDocId  Int?
+  originPassoverCertDoc    Document?            @relation("RawMaterialOriginPassoverCertDoc", fields: [originPassoverCertDocId], references: [id])
+  originPassoverValidUntil DateTime?
 
   documents RawMaterialDocument[]
   approvals RawMaterialApproval[]
