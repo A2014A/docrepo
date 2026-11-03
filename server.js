@@ -1246,6 +1246,22 @@ app.post('/api/approvals/:id/reply', requireAssistant, upload.single('file'), ah
   res.json(updatedAlso ? [regApprovalOut(updated), regApprovalOut(updatedAlso)] : regApprovalOut(updated));
 }));
 
+/* ── approval history log, for the card screen's "היסטוריה" button (R4).
+ * Writes have existed since Phase 3; this is the first read endpoint. ── */
+app.get('/api/approvals/:id/events', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const approval = await prisma.rawMaterialApproval.findUnique({ where: { id } });
+  if (!approval) return res.status(404).json({ error: 'רשומת אישור לא נמצאה' });
+  const events = await prisma.rawMaterialApprovalEvent.findMany({
+    where: { approvalId: id }, orderBy: { at: 'desc' }, include: { byUser: true },
+  });
+  res.json(events.map(e => ({
+    id: e.id, type: e.type, fromStatus: e.fromStatus, toStatus: e.toStatus,
+    payload: e.payload, byUserId: e.byUserId, byUserName: e.byUser ? (e.byUser.name || e.byUser.email) : null,
+    at: e.at,
+  })));
+}));
+
 /* ── SKU view: this SKU's raw materials + the approval for its own required
  * kashrut body (from the SKU's כשרות field) + a per-material summary ── */
 app.get('/api/skus/:id/raw-materials', requireAssistant, ah(async (req, res) => {

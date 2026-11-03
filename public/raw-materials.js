@@ -83,6 +83,10 @@ function rmInjectStyles() {
 .rm-row-sub{font-size:.8rem;color:var(--ink3);margin-top:2px;}
 .rm-needs-review{font-size:.7rem;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:99px;font-weight:600;margin-right:6px;}
 .rm-origin-col{width:170px;flex-shrink:0;font-size:.78rem;color:var(--ink2);line-height:1.3;}
+.rm-origin-col.rm-editable{cursor:pointer;padding:2px 4px;border-radius:6px;}
+.rm-origin-col.rm-editable:hover{background:var(--bg2);}
+.rm-inline-input,.rm-inline-select{width:100%;font-size:.78rem;padding:2px 4px;border:1px solid var(--accent);border-radius:4px;color:var(--ink);background:var(--card);font-family:'Heebo',sans-serif;}
+.rm-inline-select{margin-top:3px;}
 .rm-origin-header{width:170px;flex-shrink:0;font-size:12px;color:var(--ink);font-weight:500;text-align:center;}
 .rm-legend{display:flex;align-items:flex-end;gap:14px;margin-bottom:8px;position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 0;border-bottom:1px solid var(--border);}
 .rm-legend-spacer{flex:1;min-width:220px;}
@@ -357,6 +361,77 @@ function rmRenderSummary(rows) {
   `;
 }
 
+// gates write affordances in this screen: the assistant role is read-only
+// per the spec, and so is demo mode (?demo=1) once that's wired up globally
+// -- checked directly here since no shared demo-mode helper exists yet.
+function rmIsReadOnly() {
+  if (typeof effectiveRole === 'function' && effectiveRole() === 'assistant') return true;
+  try { if (new URLSearchParams(location.search).get('demo') === '1') return true; } catch (e) {}
+  return false;
+}
+
+// click-to-edit on the "מקור" column: year-round edits originKashrutText;
+// Passover edits originPassoverText + a status select. Enter/blur saves via
+// PATCH, Esc cancels. Re-renders the whole list on save/cancel (simplest
+// way to keep every derived view -- dots, computed-origin badges, color,
+// filters -- in sync with the edited value).
+function rmOriginCellClick(el) {
+  if (rmIsReadOnly() || el.dataset.editing) return;
+  const id = parseInt(el.dataset.rmId);
+  const item = RM_STATE.items.find(i => i.id === id);
+  if (!item) return;
+  el.dataset.editing = '1';
+  el.removeAttribute('onclick');
+  el.style.color = '';
+
+  if (RM_STATE.track === 'PASSOVER') {
+    el.innerHTML = `
+      <input type="text" class="rm-inline-input" id="rmEditText_${id}" value="${rmEscapeHtml(item.originPassoverText || '')}" placeholder="טקסט מקור לפסח"/>
+      <select class="rm-inline-select" id="rmEditSelect_${id}">
+        ${['UNKNOWN', 'PASSOVER', 'PASSOVER_KITNIYOT', 'NOT_PASSOVER'].map(s => `<option value="${s}" ${item.originPassoverStatus === s ? 'selected' : ''}>${RM_ORIGIN_PASSOVER_LABEL[s] || 'לא ידוע'}</option>`).join('')}
+      </select>`;
+  } else {
+    el.innerHTML = `<input type="text" class="rm-inline-input" id="rmEditText_${id}" value="${rmEscapeHtml(item.originKashrutText || '')}" placeholder="טקסט הכשר"/>`;
+  }
+
+  const fields = el.querySelectorAll('input,select');
+  fields.forEach(f => f.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); rmOriginCellSave(el); }
+    else if (e.key === 'Escape') { e.preventDefault(); rmOriginCellCancel(el); }
+  }));
+  el.addEventListener('focusout', (e) => {
+    if (el.contains(e.relatedTarget)) return; // focus moved within the same cell (text -> select)
+    rmOriginCellSave(el);
+  });
+  fields[0].focus();
+  fields[0].select();
+}
+
+function rmOriginCellCancel(el) {
+  delete el.dataset.editing;
+  rmApplyFilters();
+}
+
+async function rmOriginCellSave(el) {
+  if (!el.dataset.editing || el.dataset.saving) return;
+  el.dataset.saving = '1';
+  const id = parseInt(el.dataset.rmId);
+  const body = RM_STATE.track === 'PASSOVER'
+    ? { originPassoverText: document.getElementById('rmEditText_' + id).value.trim(), originPassoverStatus: document.getElementById('rmEditSelect_' + id).value }
+    : { originKashrutText: document.getElementById('rmEditText_' + id).value.trim() };
+  try {
+    const updated = await apiFetch('/api/raw-material-registry/' + id, { method: 'PATCH', body: JSON.stringify(body) });
+    const idx = RM_STATE.items.findIndex(i => i.id === id);
+    if (idx >= 0) RM_STATE.items[idx] = updated;
+    showToast('מקור עודכן');
+  } catch (e) {
+    showToast(e.message);
+  }
+  delete el.dataset.editing;
+  delete el.dataset.saving;
+  rmApplyFilters();
+}
+
 function rmRenderList(rows) {
   const el = document.getElementById('rmList');
   if (!rows.length) {
@@ -380,7 +455,7 @@ function rmRenderList(rows) {
           <div class="rm-row-name">${needsReview ? '<span class="rm-needs-review">לבדוק</span>' : ''}${rmEscapeHtml(item.name)}</div>
           <div class="rm-row-sub">${rmEscapeHtml(item.supplier || '— ספק לא ידוע —')}${item.manufacturer ? ' · ' + rmEscapeHtml(item.manufacturer) : ''} · ${skuText}</div>
         </div>
-        <div class="rm-origin-col"${origin && origin.color ? ` style="color:${origin.color}"` : ''}>${origin ? rmEscapeHtml(origin.text) : '—'}</div>
+        <div class="rm-origin-col${rmIsReadOnly() ? '' : ' rm-editable'}" data-rm-id="${item.id}"${rmIsReadOnly() ? '' : ' onclick="rmOriginCellClick(this)"'}${origin && origin.color ? ` style="color:${origin.color}"` : ''}>${origin ? rmEscapeHtml(origin.text) : '—'}</div>
         <div class="rm-dots-grid" style="grid-template-columns:${rmGridTemplate()}">${dots}</div>
       </div>`;
   }).join('');

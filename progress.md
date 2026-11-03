@@ -426,8 +426,33 @@ R3 was in progress; folded in as instructed. Backed up first
 Queued for later, not built now: R10's export needs all the origin fields
 (including these Passover ones) in its columns — noted for when R10 comes up.
 
-### Next (per the spec's order of work)
-R4 (card screen) — starting now → R5 (send modal) → R6 (reply modal) → R10
-(Excel export) → R11 (Excel import) → R12 (bulk send) → R7 (add-material
-flow) → R8 (SKU tab) → R9 (contacts/bodies settings), stopping after each
-with a browser-checkable summary.
+### R4 prep (started, not finished) + inline "מקור" editing (done)
+R4 itself was interrupted by a new request before the card screen was
+built. What actually landed in this pass:
+- `GET /api/approvals/:id/events` — the first *read* endpoint for the
+  approval history log (writes have existed since Phase 3). Needed for
+  R4's "היסטוריה" button, built now since it's a small, independent,
+  read-only addition. Regression: 2 new checks, returns newest-first with
+  `type`/`at`/`byUserName` — **48/48 passing**.
+- `openSkuPicker`/`confirmSkuPicker` in `index.html` gained a minimal
+  `'rmCard'` mode (one line each) that delegates to a `rmCardOnSkuPicked()`
+  function that doesn't exist yet — harmless no-op stub (guarded by
+  `typeof ... === 'function'`) until R4's linked-SKUs section is built.
+- **Inline editing on the list's "מקור" column** (requested separately,
+  done): click the cell (year-round: `originKashrutText`; Passover:
+  `originPassoverText` + a status `<select>`) → Enter or blur saves via
+  `PATCH /api/raw-material-registry/:id`, Esc cancels. Guarded by
+  `rmIsReadOnly()` (assistant role, or `?demo=1` once demo mode exists
+  elsewhere — checked directly since no shared demo helper exists yet).
+  Race-safety: a cancel deletes the `editing` flag before re-rendering, and
+  save/cancel both no-op if that flag is already gone, so the implicit
+  blur a DOM-removal causes can't trigger a duplicate/contradictory save.
+
+### Next
+R4 (card screen) — header edit, "כשרות המקור" box (two sections: ימות
+השנה/פסח), documents gallery by role, two-section approvals table
+(ימות השנה/פסח) with שלח/עדכן תשובה/שלח השלמה/היסטוריה buttons (the first
+three are R5/R6's job — show a "not built yet" message for now, exactly as
+done for the original Step 4.2 before the track revision), linked-SKU
+add/remove. Then R5 → R6 → R10 → R11 → R12 → R7 → R8 → R9, stopping after
+each with a browser-checkable summary.

@@ -2623,7 +2623,7 @@ async function openSkuPicker(mode, idx) {
 
   // הגדר נבחרים קיימים
   spSelected = new Set();
-  const existing = mode === 'edit' ? editSkus : mode === 'bulk' ? bulkSkuSelection : mode === 'rawmat' ? (rawMatSelectedSku ? [rawMatSelectedSku] : []) : (fileSkus[idx] || []);
+  const existing = mode === 'edit' ? editSkus : mode === 'bulk' ? bulkSkuSelection : mode === 'rawmat' ? (rawMatSelectedSku ? [rawMatSelectedSku] : []) : mode === 'rmCard' ? [] : (fileSkus[idx] || []);
   existing.forEach(s => spSelected.add(s.id));
 
   // נקה פילטרים
@@ -2730,12 +2730,14 @@ function confirmSkuPicker() {
     rawMatSelectedSku = chosen[0] || null;
     renderRawMatSkuPill();
     loadRawMatExistingDocs();
+  } else if (spMode === 'rmCard') {
+    if (typeof rmCardOnSkuPicked === 'function') rmCardOnSkuPicked(chosen);
   } else {
     fileSkus[spFileIdx] = chosen;
     renderSkuPills('file', spFileIdx);
   }
   closeSkuPicker();
-  if (spMode !== 'rawmat') showToast(`${chosen.length} מקטים נוספו`);
+  if (spMode !== 'rawmat' && spMode !== 'rmCard') showToast(`${chosen.length} מקטים נוספו`);
 }
 
 

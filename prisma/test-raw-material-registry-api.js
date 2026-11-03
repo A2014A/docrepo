@@ -229,6 +229,10 @@ async function snapshot() {
   const events = await prisma.rawMaterialApprovalEvent.count({ where: { approvalId } });
   check('RawMaterialApprovalEvent rows were written for the landau approval (>=3)', events >= 3, events);
 
+  const eventsRead = await api('GET', `/api/approvals/${approvalId}/events`);
+  check('GET .../events returns the full history, newest first', eventsRead.status === 200 && eventsRead.body.length === events && new Date(eventsRead.body[0].at) >= new Date(eventsRead.body[eventsRead.body.length - 1].at), eventsRead.body);
+  check('event rows carry type/at/byUserName', eventsRead.body.every(e => e.type && e.at && 'byUserName' in e));
+
   // link to a SKU (real SKU, not a test artifact -- just a link), then verify both read views
   const anySku = await prisma.sku.findFirst({ orderBy: { id: 'asc' } });
   const linkSku = await api('POST', `/api/raw-material-registry/${id}/skus`, { skuCode: anySku.code });
