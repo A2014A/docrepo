@@ -591,6 +591,27 @@ Verified: existing 52/52 regression suite still passes (no backend
 changed in this pass); checked live contact/kashrut-body data shapes
 against what the modal reads.
 
+## Side task: link documents to SKUs from exports/link-strict.csv (done)
+Backed up first (`backups/2026-11-03T14-45-54-572Z/`). Dry run
+(`prisma/link-docs-dryrun.js`) reported 79 rows / 57 distinct docs / 32
+distinct SKUs, all resolved, 1 link already existed, 78 would be created
+-- stopped and waited for approval as instructed. After approval,
+`prisma/link-docs-run.js` re-resolved everything fresh (not trusting the
+earlier dry-run JSON, in case anything changed) and created exactly those
+78 `SkuLink` rows via the same shape the app itself uses for a regular
+document→SKU link (`docType:'DOCUMENT'`, `isRawMaterial:false`,
+`approvalStatus:'APPROVED'`, `kashrutLevel:null`) -- additive only, never
+touching the 1 pre-existing link or anything else. Verified: `SkuLink`
+count went 412→490, exactly +78.
+
+## Side task: download a priority batch's files from R2 (done, read-only)
+`prisma/export-priority-batch-files.js` read `exports/priority-batch.csv`
+(documentId + priorityFileName columns) and saved each document's file to
+`exports/priority-batch-2026-11-03/<priorityFileName>` (exact name,
+Hebrew-safe UTF-8). Zero DB writes -- only `Document.findMany` (read) and
+an R2 `getObjectStream` per unique document. All 12 rows resolved and
+wrote successfully; verified non-zero file sizes on disk.
+
 ### Next
 R6 (reply modal) → R10 (Excel export) → R11 (Excel import) → R12 (bulk
 send) → R7 (add-material flow) → R8 (SKU tab) → R9 (contacts/bodies
