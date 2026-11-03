@@ -347,8 +347,41 @@ assertions from the superseded approach removed.
 **40/40 passing**, self-cleanup independently re-verified (DB row counts
 + zero leftover `TEST-`/`test-admin` rows, checked outside the script too).
 
+### R3 — List screen update (done, frontend only, no backend changes needed)
+`public/raw-materials.js` rewritten for the two-track model:
+- **Track switch** ("ימות השנה | פסח" pill buttons) at the top. Switching
+  resets the body/status filter selections (they're track-specific) and
+  re-renders the legend/dots/filter-options/counters/list for that track.
+- **Body column sets are track-dependent**: `YEAR_ROUND` = all active
+  bodies; `PASSOVER` = active `handlesPassover` bodies **plus** any body
+  with a real `PASSOVER` approval row on *any* item (computed once across
+  the whole dataset after load, so the legend/dots stay one fixed column
+  set — not per-row — even for a stray body that no longer handles
+  Passover or went inactive).
+- **Colors**: NOT_SENT gray, SENT_PENDING orange, APPROVED green, REJECTED
+  red, `NEEDS_INFO` purple, CONDITIONAL blue, `APPROVED_KITNIYOT` yellow.
+  The status-filter dropdown only offers the statuses valid for the
+  current track (mirrors the API's `isValidStatusForTrack`).
+- **Counters**: added "בקשת פרטים" (NEEDS_INFO count, track-aware like the
+  rest).
+- **Origin kashrut**: small line per row, e.g. "מקור: OK · תעודה עד
+  06/2027" (or "יש תעודה" without a date, or nothing if there's no origin
+  data at all). New "ללא תעודת מקור" filter checkbox.
+- **Legend**: 12px dark text (was .62rem light gray), `position:sticky;
+  top:0` so it stays visible on scroll, same grid as the dots (unchanged
+  mechanism, just now per-track).
+- **Removed**: the "פ" badge and "מאושר לפסח (גוף)" filter from the
+  superseded single-row Passover attempt — the track switch replaces both.
+
+No backend changes were needed for R3 (origin fields and `track` were
+already in the list API response from R2); verified the existing 40/40
+regression suite still passes unchanged, and spot-checked via HTTP that
+real data (7 raw materials, currently all `YEAR_ROUND` only — nothing's
+been sent for Passover yet in production data) shapes correctly for the
+new UI. Local server left running for manual browser verification.
+
 ### Next (per the spec's order of work) — not started
-R3 (list screen: track switch, new status colors incl. `NEEDS_INFO`
-purple/`APPROVED_KITNIYOT` yellow, origin-kashrut display, sticky legend,
-remove the old "פ" badge/passover filter) → R4 → R5 → R6 → R10 → R11 → R12
-→ R7 → R8 → R9, stopping after each with a browser-checkable summary.
+R4 (card screen) → R5 (send modal) → R6 (reply modal) → R10 (Excel export)
+→ R11 (Excel import) → R12 (bulk send) → R7 (add-material flow) → R8 (SKU
+tab) → R9 (contacts/bodies settings), stopping after each with a
+browser-checkable summary.

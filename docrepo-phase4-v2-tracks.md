@@ -28,6 +28,15 @@ Same rules as before:
   - `originCertDocId Int?` → Document, the certificate if one exists;
   - `originCertValidUntil DateTime?`;
   - `originHasCert Boolean @default(false)`.
+- **`RawMaterial` origin Passover fields** (added 3.11):
+  - `originPassoverStatus` (enum `UNKNOWN | PASSOVER | PASSOVER_KITNIYOT | NOT_PASSOVER`, default `UNKNOWN`);
+  - `originPassoverText String?` (e.g. "OU-P", "OK-P", "עדה חרדית לפסח");
+  - `originPassoverCertDocId Int?` → Document;
+  - `originPassoverValidUntil DateTime?`.
+
+  How they are used:
+  - **List:** a "מקור" column. The year-round view shows the hechsher and the cert expiry. The Passover view shows the Passover marking, colored by status. Add a filter "כשר לפסח במקור".
+  - **Computed approval:** if the origin body is a tracked active body, that body's dot shows as approved with a "מקור" marker. This is computed in the API, not stored, and never overrides a real approval row. The same applies to Passover when the origin is PASSOVER or PASSOVER_KITNIYOT and the body handlesPassover.
 - **`RawMaterialApproval`** – add `track ApprovalTrack @default(YEAR_ROUND)` (enum `YEAR_ROUND | PASSOVER`).
   - Change the unique key from `(rawMaterialId, kashrutBodyId)` to `(rawMaterialId, kashrutBodyId, track)`.
   - Dropping the old unique index loses no data, but **if Prisma warns about anything, stop and show me** before accepting.
