@@ -49,6 +49,31 @@ enum RequestStatus {
   FAILED
 }
 
+// ── Raw-material approval registry (added 1.11.2026, additive migration) ──
+enum RawMaterialDocRole {
+  LABEL
+  BACK_LABEL
+  ANALYSIS
+  CERT
+  SPEC
+  OTHER
+}
+
+enum RawMaterialApprovalStatus {
+  NOT_SENT
+  SENT_PENDING
+  APPROVED
+  REJECTED
+  CONDITIONAL
+}
+
+enum RawMaterialEventType {
+  SENT
+  REPLY
+  STATUS_CHANGE
+  NOTE
+}
+
 model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
@@ -65,6 +90,9 @@ model User {
   reviewedLinks     SkuLink[]      @relation("reviewedBy")
   requestedCerts    CertRequest[]  @relation("requestedBy")
   fulfilledCerts    CertRequest[]  @relation("fulfilledBy")
+
+  updatedRawMaterialApprovals RawMaterialApproval[]
+  rawMaterialApprovalEvents   RawMaterialApprovalEvent[]
 }
 
 model Customer {
@@ -105,6 +133,7 @@ model Sku {
 
   links            SkuLink[]
   certRequests     CertRequest[]
+  rawMaterials     SkuRawMaterial[]
 
   @@index([categoryId])
 }
@@ -152,6 +181,9 @@ model Document {
   createdAt      DateTime  @default(now())
 
   links SkuLink[]
+  rawMaterialDocuments   RawMaterialDocument[]
+  rawMaterialDefaultFor  RawMaterial[]           @relation("RawMaterialDefaultDoc")
+  rawMaterialReplyFor    RawMaterialApproval[]   @relation("RawMaterialApprovalReplyDoc")
 }
 
 model SkuLink {
@@ -210,4 +242,115 @@ model Contact {
   email     String?
   phone     String?
   createdAt DateTime @default(now())
+
+  // added 1.11.2026 for the raw-material registry; nullable so existing
+  // free-form contacts keep working untouched
+  kashrutBodyId Int?
+  kashrutBody   KashrutBody? @relation("ContactKashrutBody", fields: [kashrutBodyId], references: [id])
+  role          String?
+
+  defaultForBodies KashrutBody[]         @relation("KashrutBodyDefaultContact")
+  rawMaterialApprovals RawMaterialApproval[]
+}
+
+// ── Raw-material approval registry (added 1.11.2026, additive migration) ──
+// See docrepo-raw-materials-spec.md. Does not replace SkuLink/isRawMaterial/
+// approvalStatus yet -- those keep working until the new screens take over.
+
+model KashrutBody {
+  id               Int      @id @default(autoincrement())
+  name             String   @unique
+  shortName        String?
+  active           Boolean  @default(true)
+  defaultContactId Int?
+  defaultContact   Contact? @relation("KashrutBodyDefaultContact", fields: [defaultContactId], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  contacts  Contact[]             @relation("ContactKashrutBody")
+  approvals RawMaterialApproval[]
+}
+
+model RawMaterial {
+  id           Int       @id @default(autoincrement())
+  name         String
+  supplier     String?
+  manufacturer String?
+  defaultDocId Int?
+  defaultDoc   Document? @relation("RawMaterialDefaultDoc", fields: [defaultDocId], references: [id])
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  documents RawMaterialDocument[]
+  approvals RawMaterialApproval[]
+  skus      SkuRawMaterial[]
+}
+
+model RawMaterialDocument {
+  id            Int                @id @default(autoincrement())
+  rawMaterialId Int
+  rawMaterial   RawMaterial        @relation(fields: [rawMaterialId], references: [id])
+  documentId    Int
+  document      Document           @relation(fields: [documentId], references: [id])
+  docRole       RawMaterialDocRole @default(OTHER)
+  uploadedAt    DateTime           @default(now())
+
+  @@index([rawMaterialId])
+}
+
+model RawMaterialApproval {
+  id            Int                       @id @default(autoincrement())
+  rawMaterialId Int
+  rawMaterial   RawMaterial               @relation(fields: [rawMaterialId], references: [id])
+  kashrutBodyId Int
+  kashrutBody   KashrutBody               @relation(fields: [kashrutBodyId], references: [id])
+  contactId     Int?
+  contact       Contact?                  @relation(fields: [contactId], references: [id])
+  status        RawMaterialApprovalStatus @default(NOT_SENT)
+  kashrutLevel  String?
+  sentAt        DateTime?
+  sentVia       RequestChannel?
+  sentDocIds    Json?
+  replyAt       DateTime?
+  replyDocId    Int?
+  replyDoc      Document?                 @relation("RawMaterialApprovalReplyDoc", fields: [replyDocId], references: [id])
+  conditionText String?
+  validUntil    DateTime?
+  notes         String?
+  updatedById   Int?
+  updatedBy     User?                     @relation(fields: [updatedById], references: [id])
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+
+  events RawMaterialApprovalEvent[]
+
+  @@unique([rawMaterialId, kashrutBodyId])
+}
+
+model RawMaterialApprovalEvent {
+  id         Int                        @id @default(autoincrement())
+  approvalId Int
+  approval   RawMaterialApproval        @relation(fields: [approvalId], references: [id])
+  type       RawMaterialEventType
+  fromStatus RawMaterialApprovalStatus?
+  toStatus   RawMaterialApprovalStatus?
+  payload    Json?
+  byUserId   Int?
+  byUser     User?                      @relation(fields: [byUserId], references: [id])
+  at         DateTime                   @default(now())
+
+  @@index([approvalId])
+}
+
+model SkuRawMaterial {
+  id            Int         @id @default(autoincrement())
+  skuId         Int
+  sku           Sku         @relation(fields: [skuId], references: [id])
+  rawMaterialId Int
+  rawMaterial   RawMaterial @relation(fields: [rawMaterialId], references: [id])
+  notes         String?
+  createdAt     DateTime    @default(now())
+
+  @@unique([skuId, rawMaterialId])
 }
