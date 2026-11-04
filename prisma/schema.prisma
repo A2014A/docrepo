@@ -229,6 +229,8 @@ model Document {
   rawMaterialReplyFor    RawMaterialApproval[]   @relation("RawMaterialApprovalReplyDoc")
   rawMaterialOriginCertFor RawMaterial[]         @relation("RawMaterialOriginCertDoc")
   rawMaterialOriginPassoverCertFor RawMaterial[] @relation("RawMaterialOriginPassoverCertDoc")
+
+  identification DocIdentification? // added 3.11.2026 (link-suggestions L1, additive)
 }
 
 model SkuLink {
@@ -429,4 +431,52 @@ model SkuRawMaterial {
   createdAt     DateTime    @default(now())
 
   @@unique([skuId, rawMaterialId])
+}
+
+// ── Link-suggestions L1: per-document identification cache (added 3.11.2026, additive) ──
+// source=FREE: resolved locally via pdf-parse text layer + regex (no Claude call, $0).
+// source=HAIKU: free step didn't yield enough; Claude Haiku filled in the fields.
+// source=HAIKU_FAILED: Haiku call errored -- retryable on the next run.
+// source=UNSUPPORTED: file type /api/identify can't read (e.g. .msg, .txt) -- skipped, not retried.
+enum DocIdentSource {
+  FREE
+  HAIKU
+  HAIKU_FAILED
+  UNSUPPORTED
+  PENDING_HAIKU // free step ran, incomplete, but no ANTHROPIC_API_KEY was available yet -- retried like HAIKU_FAILED
+}
+
+model DocIdentification {
+  id             Int             @id @default(autoincrement())
+  documentId     Int             @unique
+  document       Document        @relation(fields: [documentId], references: [id])
+
+  docKind        String?         // תעודת בד"ץ / תעודת רבנות / בקשה לרבנות / דוח ייצור / תווית / מכתב / חשבונית / אחר
+  certNo         String?
+  requestNo      String?
+  products       Json?           // string[] -- product names as written
+  manufacturer   String?
+  kashrutBody    String?
+  track          String?         // ימות השנה / פסח / פסח-קטניות
+  validUntil     DateTime?
+  productionDate DateTime?
+  lots           Json?           // string[] -- LOT / production-date strings as written
+
+  freeSkuCodes      Json?        // string[] -- exact SKU codes found in the free text-layer scan
+  freeCertCandidate String?      // 5-6 digit number found near מספר/תעודה/בקשה, before any Haiku call
+  hasTextLayer      Boolean      @default(false)
+  pageCount         Int?
+  r2Etag            String?      // for MD5 matching against a Drive index later
+
+  rawText        String?         // first ~2000 chars of extracted/free text, for debugging
+  source         DocIdentSource
+  model          String?         // e.g. claude-haiku-4-5-20251001, null when source=FREE
+  costInputTokens  Int?
+  costOutputTokens Int?
+  errorMessage     String?
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([source])
 }
