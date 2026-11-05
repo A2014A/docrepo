@@ -136,6 +136,7 @@ model User {
 
   updatedRawMaterialApprovals RawMaterialApproval[]
   rawMaterialApprovalEvents   RawMaterialApprovalEvent[]
+  decidedLinkSuggestions      LinkSuggestion[] // added 5.11.2026 (link-suggestions L2, additive)
 }
 
 model Customer {
@@ -177,6 +178,7 @@ model Sku {
   links            SkuLink[]
   certRequests     CertRequest[]
   rawMaterials     SkuRawMaterial[]
+  linkSuggestions  LinkSuggestion[] // added 5.11.2026 (link-suggestions L2, additive)
 
   @@index([categoryId])
 }
@@ -223,6 +225,16 @@ model Document {
   uploadedBy     User?     @relation("uploadedBy", fields: [uploadedById], references: [id])
   createdAt      DateTime  @default(now())
 
+  // L0/L3 (link-suggestions spec, added 5.11.2026, additive). Never delete --
+  // archived/duplicate docs stay searchable behind an "הצג ארכיון" filter.
+  archived        Boolean  @default(false)
+  archivedReason  String?
+  noSkuNeeded     Boolean  @default(false)
+  noSkuNeededReason String? // מכתב / חשבונית / כפילות / לא רלוונטי
+  duplicateOfId   Int?
+  duplicateOf     Document?  @relation("DocumentDuplicateOf", fields: [duplicateOfId], references: [id])
+  duplicates      Document[] @relation("DocumentDuplicateOf")
+
   links SkuLink[]
   rawMaterialDocuments   RawMaterialDocument[]
   rawMaterialDefaultFor  RawMaterial[]           @relation("RawMaterialDefaultDoc")
@@ -231,6 +243,7 @@ model Document {
   rawMaterialOriginPassoverCertFor RawMaterial[] @relation("RawMaterialOriginPassoverCertDoc")
 
   identification DocIdentification? // added 3.11.2026 (link-suggestions L1, additive)
+  linkSuggestions LinkSuggestion[]  // added 5.11.2026 (link-suggestions L2, additive)
 }
 
 model SkuLink {
@@ -479,4 +492,47 @@ model DocIdentification {
   updatedAt      DateTime        @updatedAt
 
   @@index([source])
+}
+
+// ── Link-suggestions L2: rules-only candidate-SKU engine (added 5.11.2026, additive) ──
+// Editable alias table (spec signal #4) -- manufacturer names on documents
+// don't always match the SKU's "supplier" field; this maps known variants.
+model SupplierAlias {
+  id               Int      @id @default(autoincrement())
+  manufacturerName String   // name as it appears on documents (e.g. "PRIMA FOOD INGREDIENTS")
+  supplierName     String   // name as it appears in Sku.supplier/supplier2 (e.g. "AFFCO")
+  createdAt        DateTime @default(now())
+
+  @@unique([manufacturerName, supplierName])
+}
+
+enum LinkSuggestionConfidence {
+  CERTAIN
+  LIKELY
+  POSSIBLE
+}
+
+enum LinkSuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model LinkSuggestion {
+  id           Int                      @id @default(autoincrement())
+  documentId   Int
+  document     Document                 @relation(fields: [documentId], references: [id])
+  skuId        Int
+  sku          Sku                      @relation(fields: [skuId], references: [id])
+  confidence   LinkSuggestionConfidence
+  reasons      Json                     // signal booleans + matched details, for review/debugging
+  status       LinkSuggestionStatus     @default(PENDING)
+  decidedById  Int?
+  decidedBy    User?                    @relation(fields: [decidedById], references: [id])
+  decidedAt    DateTime?
+  createdAt    DateTime                 @default(now())
+
+  @@unique([documentId, skuId])
+  @@index([confidence])
+  @@index([documentId])
 }
