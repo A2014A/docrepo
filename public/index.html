@@ -192,6 +192,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRawMaterialsRegistry()">📋 מאגר חומרי גלם (חדש)</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openLinkSuggestions()">🔗 הצעות קישור</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openSkuMasterImport()">📥 ייבוא רשימת מק"טים</button>
+      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openGoodsReceiptsImport()">📦 קליטת דוחות קבלה</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRoleCodes()">🔑 ניהול קודי גישה</button>
       <button class="btn btn-outline" id="unlinkedToggleBtn" style="width:100%;padding:8px;margin-top:8px" onclick="toggleUnlinkedFilter()">🔗 מסמכים לא מקושרים למקט</button>
@@ -217,6 +218,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 <div id="linkSuggestionsPage" style="display:none"></div>
 <div id="linkSuggestionsCardPage" style="display:none"></div>
 <div id="skuMasterImportPage" style="display:none"></div>
+<div id="goodsReceiptsImportPage" style="display:none"></div>
 
 <!-- UPLOAD MODAL -->
 <div class="modal-bg" id="uploadModal">
@@ -3048,5 +3050,6 @@ if ('serviceWorker' in navigator) {
 <script src="/raw-materials.js"></script>
 <script src="/link-suggestions.js"></script>
 <script src="/sku-master-import.js"></script>
+<script src="/goods-receipts-import.js"></script>
 </body>
 </html>

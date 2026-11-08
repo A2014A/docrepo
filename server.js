@@ -1985,6 +1985,134 @@ app.post('/api/sku-master-import/apply', requireAuth, requireAdmin, upload.singl
   res.json({ ok: true, counts, unsafeSkipped: unsafeDetails });
 }));
 
+/* ── S2: goods receipts import ("📦 קליטת דוחות קבלה") -- PREVIEW ONLY ──
+ * WMS/Priority exports are usually UTF-16 with cells wrapped as ="value".
+ * Nothing in this block writes to the database -- it only reads existing
+ * Sku rows (to detect which receipt SKUs already exist) and computes a
+ * preview grouped by SKU. No GoodsReceipt/ShelfLifeRule tables exist yet;
+ * those are added when the real import (not just preview) is built. */
+function decodeGoodsReceiptBuffer(buf) {
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return buf.slice(2).toString('utf16le');
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    const body = Buffer.from(buf.slice(2));
+    body.swap16();
+    return body.toString('utf16le');
+  }
+  let text = buf.toString('utf8');
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  return text;
+}
+function stripEqualsWrapper(v) {
+  if (!v) return v;
+  const m = /^="?([^"]*)"?$/.exec(v.trim());
+  return m ? m[1] : v;
+}
+function parseGoodsReceiptRow(header, row) {
+  const col = (name) => header.indexOf(name);
+  const get = (name) => { const i = col(name); if (i === -1) return ''; return stripEqualsWrapper((row[i] || '').trim()); };
+  return {
+    skuCode: get('פריט'),
+    skuName: get('תיאור פריט'),
+    receiptNo: get('קליטה'),
+    receiptDate: get('תאריך קליטה'),
+    expiry: get('פג תוקף'),
+    quantity: parseFloat(get('כמות')) || 0,
+    batch: get('אצווה') || null,
+    productionDate: get('תאריך יצור') || null,
+    warehouseGroup: get('קבוצת פריט') || null,
+  };
+}
+// Accepts DD/MM/YYYY, DD-MM-YYYY or ISO YYYY-MM-DD; returns a Date or null.
+function parseWmsDate(s) {
+  if (!s) return null;
+  s = s.trim();
+  let m = /^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/.exec(s);
+  if (m) {
+    let [, d, mo, y] = m;
+    if (y.length === 2) y = '20' + y;
+    const dt = new Date(Date.UTC(+y, +mo - 1, +d));
+    return isNaN(dt) ? null : dt;
+  }
+  m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) { const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return isNaN(dt) ? null : dt; }
+  return null;
+}
+// Defaults per docrepo-sprint-8.11.md S2: canned (שימורים) = 36mo, vacuum
+// (name contains וואקום) = 24mo, else unknown. Per-SKU overrides confirmed 4.11.2026.
+const SHELF_LIFE_PER_SKU = { '13460': 36, '13459': 24, '13461': 24 };
+function shelfLifeMonthsFor(sku, fallbackName) {
+  if (sku && SHELF_LIFE_PER_SKU[sku.code] != null) return SHELF_LIFE_PER_SKU[sku.code];
+  if (sku && (sku.categoryName || '').includes('שימורים')) return 36;
+  const name = (sku && sku.name) || fallbackName || '';
+  if (name.includes('וואקום')) return 24;
+  return null;
+}
+
+app.post('/api/goods-receipts/preview', requireAuth, requireAdmin, upload.array('files', 20), ah(async (req, res) => {
+  if (!req.files || !req.files.length) return res.status(400).json({ error: 'לא נבחרו קבצים' });
+
+  const allRows = [];
+  for (const file of req.files) {
+    const text = decodeGoodsReceiptBuffer(file.buffer);
+    const rows = parseSkuMasterCsv(text);
+    if (!rows.length) continue;
+    const header = rows[0];
+    for (let i = 1; i < rows.length; i++) {
+      const parsed = parseGoodsReceiptRow(header, rows[i]);
+      if (parsed.skuCode) allRows.push({ ...parsed, sourceFile: file.originalname });
+    }
+  }
+  if (!allRows.length) return res.status(400).json({ error: 'לא נמצאו שורות תקינות בקבצים' });
+
+  const codes = [...new Set(allRows.map(r => r.skuCode))];
+  const existingSkus = await prisma.sku.findMany({ where: { code: { in: codes } } });
+  const byCode = new Map(existingSkus.map(s => [s.code, s]));
+
+  // Unique key (skuCode, receiptNo, expiry): sum quantity across rows sharing it.
+  const groups = new Map();
+  for (const r of allRows) {
+    const key = `${r.skuCode}::${r.receiptNo}::${r.expiry}`;
+    if (!groups.has(key)) groups.set(key, { ...r, quantity: 0 });
+    groups.get(key).quantity += r.quantity;
+  }
+
+  const bySkuMap = new Map();
+  for (const g of groups.values()) {
+    const sku = byCode.get(g.skuCode) || null;
+    const months = shelfLifeMonthsFor(sku, g.skuName);
+    const expiryDate = parseWmsDate(g.expiry);
+    const receiptDate = parseWmsDate(g.receiptDate);
+    let estimatedProductionDate = null, flag = null;
+    if (!g.productionDate && months != null && expiryDate) {
+      const d = new Date(expiryDate);
+      d.setUTCMonth(d.getUTCMonth() - months);
+      estimatedProductionDate = d.toISOString().slice(0, 10);
+      if (receiptDate && d > receiptDate) flag = 'חיי מדף שגויים';
+    }
+    if (!bySkuMap.has(g.skuCode)) {
+      bySkuMap.set(g.skuCode, { skuCode: g.skuCode, skuName: g.skuName, existingSkuId: sku ? sku.id : null, isNew: !sku, receipts: [] });
+    }
+    bySkuMap.get(g.skuCode).receipts.push({
+      receiptNo: g.receiptNo, receiptDate: g.receiptDate, expiry: g.expiry, quantity: g.quantity,
+      batch: g.batch, productionDate: g.productionDate, shelfLifeMonthsUsed: months,
+      estimatedProductionDate, flag, sourceFile: g.sourceFile,
+    });
+  }
+
+  const bySku = [...bySkuMap.values()].sort((a, b) => a.skuCode.localeCompare(b.skuCode));
+  const newSkus = bySku.filter(s => s.isNew).map(s => ({ code: s.skuCode, name: s.skuName }));
+
+  res.json({
+    filesProcessed: req.files.length,
+    rowsParsed: allRows.length,
+    receiptGroups: groups.size,
+    skuCount: bySku.length,
+    newSkuCount: newSkus.length,
+    bySku,
+    newSkus,
+  });
+}));
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
 
 app.listen(PORT, () => {
