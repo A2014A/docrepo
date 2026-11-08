@@ -20,6 +20,19 @@ enum CertType {
   ANNUAL_REGULAR_PER_PRODUCTION_PESACH // לימות השנה שנתי, לפסח לפי יצור
 }
 
+// S1 (docrepo-sprint-8.11.md, added 8.11.2026)
+enum SkuItemType {
+  FOOD
+  NOT_PRODUCT // "לא מוצר" -- hidden by default everywhere (lists, counts, missing-cert reports, L2 candidates)
+  REVIEW      // "לבדיקה"
+}
+
+enum SkuSource {
+  IMPORT       // יבוא
+  LOCAL        // רכש מקומי
+  PRIVATE_LABEL // מותג פרטי
+}
+
 enum ApprovalStatus {
   PENDING
   APPROVED
@@ -168,6 +181,16 @@ model Sku {
   pesachStatusRef  String?
   notes            String?
   active           Boolean   @default(true)
+
+  // S1 (docrepo-sprint-8.11.md, added 8.11.2026, additive): master SKU list
+  // import from the "מקטים ראשי" sheet. Distinct from the legacy sourceFlag/
+  // responsible fields used by the older /api/skus/import (xlsx) route --
+  // kept separate to avoid silently redefining what those already mean.
+  categoryName     String?      // קטגוריה (פריוריטי) -- free-text display name, independent of categoryId/Category
+  itemType         SkuItemType  @default(FOOD) // סוג פריט: "לא מוצר" -> NOT_PRODUCT, "לבדיקה" -> REVIEW, else FOOD
+  source           SkuSource?   // מקור (יבוא/רכש מקומי): יבוא/רכש מקומי/מותג פרטי -- null when the sheet leaves it blank
+  buyer            String?      // איש רכש
+  priorityActive   Boolean?     // פעיל בפריוריטי: כן -> true, "לא נמצא ברשימות" -> false
 
   // provenance / new-SKU detection
   origin           String[]  @default([])

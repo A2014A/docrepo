@@ -50,7 +50,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowed = ['.pdf','.doc','.docx','.xls','.xlsx','.ppt','.pptx','.jpg','.jpeg','.png','.gif','.txt'];
+    const allowed = ['.pdf','.doc','.docx','.xls','.xlsx','.ppt','.pptx','.jpg','.jpeg','.png','.gif','.txt','.csv'];
     cb(null, allowed.includes(path.extname(file.originalname).toLowerCase()));
   }
 });
@@ -1762,6 +1762,227 @@ app.post('/api/link-suggestions/:id/mark-duplicate', requireAssistant, ah(async 
   if (!original) return res.status(404).json({ error: 'מסמך המקור לא נמצא' });
   await prisma.document.update({ where: { id: documentId }, data: { duplicateOfId } });
   res.json({ ok: true });
+}));
+
+/* ── S1: master SKU list import ("📥 ייבוא רשימת מק"טים") ── */
+// RFC4180 CSV parser (handles "" escaped quotes and commas inside quoted fields).
+function parseSkuMasterCsv(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\r') { /* skip */ }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length > 1 || (r.length === 1 && r[0] !== ''));
+}
+function mapSkuSource(v) {
+  v = (v || '').trim();
+  if (v === 'יבוא') return 'IMPORT';
+  if (v === 'רכש מקומי') return 'LOCAL';
+  if (v === 'מותג פרטי') return 'PRIVATE_LABEL';
+  return null;
+}
+function mapSkuItemType(v) {
+  v = (v || '').trim();
+  if (v === 'לא מוצר') return 'NOT_PRODUCT';
+  if (v === 'לבדיקה') return 'REVIEW';
+  return 'FOOD';
+}
+function mapPriorityActive(v) {
+  v = (v || '').trim();
+  if (v === 'כן') return true;
+  if (v === 'לא נמצא ברשימות') return false;
+  return null;
+}
+function parseSkuMasterRow(header, row) {
+  const col = (name) => header.indexOf(name);
+  const get = (name) => { const i = col(name); return i === -1 ? '' : (row[i] || '').trim(); };
+  return {
+    code: get('מק"ט'),
+    name: get('תיאור'),
+    categoryName: get('קטגוריה (פריוריטי)') || null,
+    tipus: get('טיפוס') || null,
+    source: mapSkuSource(get('מקור (יבוא/רכש מקומי)')),
+    supplier: get('ספק 1') || null,
+    supplier2: get('ספק 2') || null,
+    buyer: get('איש רכש') || null,
+    kashrutBodyRef: get('כשרות ימות השנה') || null,
+    pesachStatusRef: get('כשרות פסח') || null,
+    priorityActive: mapPriorityActive(get('פעיל בפריוריטי (4.11)')),
+    itemType: mapSkuItemType(get('סוג פריט')),
+  };
+}
+// The 7 diffable fields per S1's spec wording: category, kashrut, Passover, supplier, buyer, import/local, active.
+const SKU_DIFF_FIELDS = [
+  { field: 'categoryName', label: 'קטגוריה' },
+  { field: 'kashrutBodyRef', label: 'כשרות (ימות השנה)' },
+  { field: 'pesachStatusRef', label: 'כשרות פסח' },
+  { field: 'supplier', label: 'ספק' },
+  { field: 'buyer', label: 'איש רכש' },
+  { field: 'source', label: 'מקור (יבוא/רכש מקומי)' },
+  { field: 'priorityActive', label: 'פעיל בפריוריטי' },
+];
+
+// decode the HTML entities left over from the old single-row Passover design
+function decodeSkuEntities(s) {
+  return (s || '').replace(/&quot;/g, '"').replace(/&#8211;/g, '–').replace(/&amp;/g, '&');
+}
+const KASHRUT_HONORIFICS_RE = /(הרב|שליט"?א|שליט״א|רב אב"?ד|רב אב״ד|רב מוכר)/g;
+function normalizeKashrutText(s) {
+  if (!s) return '';
+  let t = decodeSkuEntities(s).replace(KASHRUT_HONORIFICS_RE, ' ');
+  t = t.replace(/[.,'"״׳()–—-]/g, ' ').replace(/\s+/g, ' ').trim();
+  return t;
+}
+function kashrutTextsRelate(a, b) {
+  const na = normalizeKashrutText(a), nb = normalizeKashrutText(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  return na.length >= 3 && nb.length >= 3 && (na.includes(nb) || nb.includes(na));
+}
+// A kashrutBodyRef replacement is "safe" if the new body + new Passover value
+// together contain the same information as the decoded old text -- i.e. the
+// old single-row design's embedded "(פסח: ...)" note just moved to the
+// separate pesachStatusRef column, rather than being lost or contradicted.
+function checkKashrutReplacementSafety(oldValue, newKashrutBodyRef, newPesachStatusRef) {
+  const decoded = decodeSkuEntities(oldValue || '');
+  const parenMatch = decoded.match(/^(.*?)\(([^)]*)\)\s*$/);
+  if (!parenMatch) {
+    // no embedded note -- just a plain name; safe iff it relates to the new body
+    return { safe: kashrutTextsRelate(decoded, newKashrutBodyRef), oldBase: decoded.trim(), oldInner: null };
+  }
+  const oldBase = parenMatch[1].trim();
+  let oldInner = parenMatch[2].trim().replace(/^פסח\s*:?\s*/, '').trim();
+  const baseSafe = kashrutTextsRelate(oldBase, newKashrutBodyRef);
+  const innerSafe = !oldInner || kashrutTextsRelate(oldInner, newPesachStatusRef);
+  return { safe: baseSafe && innerSafe, oldBase, oldInner: oldInner || null };
+}
+
+app.post('/api/sku-master-import/preview', requireAuth, requireAdmin, upload.single('file'), ah(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  const text = req.file.buffer.toString('utf8');
+  const rows = parseSkuMasterCsv(text);
+  if (!rows.length) return res.status(400).json({ error: 'קובץ ריק' });
+  const header = rows[0];
+  const parsedRows = [];
+  for (let i = 1; i < rows.length; i++) {
+    const parsed = parseSkuMasterRow(header, rows[i]);
+    if (parsed.code) parsedRows.push(parsed);
+  }
+
+  const codes = parsedRows.map(r => r.code);
+  const existingSkus = await prisma.sku.findMany({ where: { code: { in: codes } } });
+  const existingByCode = new Map(existingSkus.map(s => [s.code, s]));
+
+  const newSkus = [];
+  const changed = [];
+  let unchangedCount = 0;
+
+  for (const r of parsedRows) {
+    const existing = existingByCode.get(r.code);
+    if (!existing) {
+      newSkus.push(r);
+      continue;
+    }
+    const changes = [];
+    for (const { field, label } of SKU_DIFF_FIELDS) {
+      const oldValue = existing[field] ?? null;
+      const newValue = r[field] ?? null;
+      if ((oldValue || null) !== (newValue || null)) {
+        const changeType = (oldValue === null || oldValue === undefined || oldValue === '') ? 'fill' : 'replace';
+        const entry = { field, label, oldValue, newValue, changeType };
+        if (field === 'kashrutBodyRef' && changeType === 'replace') {
+          entry.safety = checkKashrutReplacementSafety(oldValue, r.kashrutBodyRef, r.pesachStatusRef);
+        }
+        changes.push(entry);
+      }
+    }
+    if (changes.length) changed.push({ code: r.code, name: r.name, changes });
+    else unchangedCount++;
+  }
+
+  res.json({
+    totalRows: parsedRows.length,
+    newCount: newSkus.length,
+    changedCount: changed.length,
+    unchangedCount,
+    newSkus,
+    changed,
+  });
+}));
+
+app.post('/api/sku-master-import/apply', requireAuth, requireAdmin, upload.single('file'), ah(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  const applyFillEmpty = req.body.applyFillEmpty === '1' || req.body.applyFillEmpty === 'true';
+  const applySafeKashrutReplacements = req.body.applySafeKashrutReplacements === '1' || req.body.applySafeKashrutReplacements === 'true';
+  const createNewSkus = req.body.createNewSkus === '1' || req.body.createNewSkus === 'true';
+
+  const text = req.file.buffer.toString('utf8');
+  const rows = parseSkuMasterCsv(text);
+  if (!rows.length) return res.status(400).json({ error: 'קובץ ריק' });
+  const header = rows[0];
+  const parsedRows = [];
+  for (let i = 1; i < rows.length; i++) {
+    const parsed = parseSkuMasterRow(header, rows[i]);
+    if (parsed.code) parsedRows.push(parsed);
+  }
+  const codes = parsedRows.map(r => r.code);
+  const existingSkus = await prisma.sku.findMany({ where: { code: { in: codes } } });
+  const existingByCode = new Map(existingSkus.map(s => [s.code, s]));
+
+  const counts = { fillApplied: 0, safeReplaceApplied: 0, unsafeReplaceSkipped: 0, skusUpdated: 0, newSkusCreated: 0, byField: {} };
+  const unsafeDetails = [];
+
+  for (const r of parsedRows) {
+    const existing = existingByCode.get(r.code);
+    if (!existing) {
+      if (createNewSkus) {
+        // not implemented in this pass -- explicitly excluded by the caller
+      }
+      continue;
+    }
+    const updateData = {};
+    for (const { field } of SKU_DIFF_FIELDS) {
+      const oldValue = existing[field] ?? null;
+      const newValue = r[field] ?? null;
+      if ((oldValue || null) === (newValue || null)) continue;
+      const changeType = (oldValue === null || oldValue === undefined || oldValue === '') ? 'fill' : 'replace';
+      if (changeType === 'fill') {
+        if (!applyFillEmpty) continue;
+        updateData[field] = newValue;
+        counts.fillApplied++;
+        counts.byField[field] = (counts.byField[field] || 0) + 1;
+      } else if (field === 'kashrutBodyRef') {
+        const safety = checkKashrutReplacementSafety(oldValue, r.kashrutBodyRef, r.pesachStatusRef);
+        if (applySafeKashrutReplacements && safety.safe) {
+          updateData[field] = newValue;
+          counts.safeReplaceApplied++;
+          counts.byField[field] = (counts.byField[field] || 0) + 1;
+        } else {
+          counts.unsafeReplaceSkipped++;
+          unsafeDetails.push({ code: r.code, name: r.name, oldValue, newValue });
+        }
+      }
+      // other "replace" fields: not requested this pass, left untouched
+    }
+    if (Object.keys(updateData).length) {
+      await prisma.sku.update({ where: { code: r.code }, data: updateData });
+      counts.skusUpdated++;
+    }
+  }
+
+  res.json({ ok: true, counts, unsafeSkipped: unsafeDetails });
 }));
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
