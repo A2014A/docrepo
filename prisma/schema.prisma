@@ -536,3 +536,38 @@ model LinkSuggestion {
   @@index([confidence])
   @@index([documentId])
 }
+
+// ── L2 item 9 (added 5.11.2026, additive): tracking-spreadsheet import. ──
+// Read-only mirror of two CSVs the user maintains outside docrepo (requests.csv,
+// rabbinate-certs.csv) that already map Rabbinate request/cert numbers to SKUs.
+// Re-runnable: each import wipes rows for that sourceFile and reinserts fresh,
+// so replacing the CSV and re-running keeps this table in sync. No Google
+// credentials -- plain local CSV files under docrepo/imports/.
+enum TrackingSheetKind {
+  REQUEST // from requests.csv -- one row per product per request (סימוכין)
+  CERT    // from rabbinate-certs.csv -- one row per product per certificate (מס' תעודה)
+}
+
+model TrackingSheetMap {
+  id                Int               @id @default(autoincrement())
+  kind              TrackingSheetKind
+  refNumber         String            // סימוכין (REQUEST) or מס' תעודה (CERT)
+  product           String?
+  kashrutBody       String?
+  manufacturer      String?
+  track             String?           // סוג הבקשה (REQUEST) or לימות השנה/פסח (CERT)
+  validUntil        DateTime?         // תוקף תעודת רבנות (REQUEST) or תוקף (CERT)
+  lotCodes          String?           // קוד ייצור (REQUEST) or קודי ייצור ותאריכים (CERT)
+  certainSkuCodes   Json?             // string[] -- מק"ט (REQUEST, single) or מקטים מותאמים ודאי (CERT, list)
+  possibleSkuCodes  Json?             // string[] -- מקטים מועמדים לבדיקה (CERT only)
+  linkedCertNo      String?           // מספר תעודת רבנות (REQUEST only) -- links the request to its resulting cert
+  barcode           String?           // ברקוד (REQUEST only)
+  requestStatus     String?           // סטטוס בקשה (REQUEST only)
+  submittedDate     DateTime?         // תאריך הגשה (REQUEST only)
+  sourceFile        String            // "requests.csv" | "rabbinate-certs.csv" -- which import wiped/wrote this row
+  rawRow            Json              // original CSV row, for audit/debugging
+  createdAt         DateTime          @default(now())
+
+  @@index([kind, refNumber])
+  @@index([sourceFile])
+}

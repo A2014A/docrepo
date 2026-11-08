@@ -1531,13 +1531,6 @@ app.post('/api/identify-by-id/:id', requireAssistant, ah(async (req, res) => {
   }
 }));
 
-app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
-
-app.listen(PORT, () => {
-  console.log(`\n מאגר מסמכים פועל על http://localhost:${PORT}`);
-  console.log(`  כניסת מנהל: admin / 1234 (אם זו הרצה ראשונה)\n`);
-});
-
 /* ── AI IDENTIFY ── */
 app.post('/api/identify', requireAssistant, upload.single('file'), ah(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
@@ -1595,3 +1588,185 @@ ${skuList}
     res.status(500).json({ error: e.message });
   }
 }));
+
+/* ── L3: link-suggestions review screen ("🔗 הצעות קישור") ── */
+const CONF_RANK = { CERTAIN: 3, LIKELY: 2, POSSIBLE: 1, NONE: 0 };
+const NO_SKU_REASONS = ['מכתב', 'חשבונית', 'כפילות', 'לא רלוונטי'];
+
+async function reviewQueueBase() {
+  // documents eligible for review: unlinked, not archived, not marked
+  // no-sku-needed, not a known duplicate -- per L0/L4 these are excluded
+  // from the unlinked count and the review queue.
+  const idents = await prisma.docIdentification.findMany({
+    where: { document: { links: { none: {} }, archived: false, noSkuNeeded: false, duplicateOfId: null } },
+    include: { document: { select: { id: true, title: true, docExt: true, createdAt: true } } },
+  });
+  const suggestions = await prisma.linkSuggestion.groupBy({
+    by: ['documentId', 'confidence'],
+    _count: true,
+    where: { status: 'PENDING' },
+  });
+  const bestByDoc = new Map(); // documentId -> { confidence, count }
+  for (const s of suggestions) {
+    const cur = bestByDoc.get(s.documentId);
+    const rank = CONF_RANK[s.confidence];
+    if (!cur || rank > CONF_RANK[cur.confidence]) bestByDoc.set(s.documentId, { confidence: s.confidence, count: s._count });
+    else if (rank === CONF_RANK[cur.confidence]) cur.count += s._count;
+  }
+  return idents.map((r) => {
+    const best = bestByDoc.get(r.documentId);
+    return {
+      documentId: r.documentId,
+      title: r.document.title || '',
+      docExt: r.document.docExt || '',
+      createdAt: r.document.createdAt,
+      docKind: r.docKind, certNo: r.certNo, requestNo: r.requestNo, products: r.products,
+      manufacturer: r.manufacturer, kashrutBody: r.kashrutBody, track: r.track,
+      validUntil: r.validUntil, productionDate: r.productionDate,
+      bestConfidence: best ? best.confidence : 'NONE',
+      candidateCount: best ? best.count : 0,
+    };
+  });
+}
+
+app.get('/api/link-suggestions/queue', requireAssistant, ah(async (req, res) => {
+  let rows = await reviewQueueBase();
+  const { confidence, kind, body, manufacturer, dateFrom, dateTo } = req.query;
+  if (confidence && confidence !== 'all') rows = rows.filter(r => r.bestConfidence === confidence);
+  if (kind) rows = rows.filter(r => (r.docKind || '') === kind);
+  if (body) rows = rows.filter(r => (r.kashrutBody || '').includes(body));
+  if (manufacturer) rows = rows.filter(r => (r.manufacturer || '').toLowerCase().includes(String(manufacturer).toLowerCase()));
+  if (dateFrom) rows = rows.filter(r => r.createdAt >= new Date(dateFrom));
+  if (dateTo) rows = rows.filter(r => r.createdAt <= new Date(dateTo));
+  rows.sort((a, b) => CONF_RANK[b.bestConfidence] - CONF_RANK[a.bestConfidence] || a.documentId - b.documentId);
+  res.json({
+    total: rows.length,
+    counts: {
+      CERTAIN: rows.filter(r => r.bestConfidence === 'CERTAIN').length,
+      LIKELY: rows.filter(r => r.bestConfidence === 'LIKELY').length,
+      POSSIBLE: rows.filter(r => r.bestConfidence === 'POSSIBLE').length,
+      NONE: rows.filter(r => r.bestConfidence === 'NONE').length,
+    },
+    rows,
+  });
+}));
+
+app.get('/api/link-suggestions/filter-options', requireAssistant, ah(async (req, res) => {
+  const rows = await reviewQueueBase();
+  const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort();
+  res.json({
+    kinds: uniq(rows.map(r => r.docKind)),
+    bodies: uniq(rows.map(r => r.kashrutBody)),
+  });
+}));
+
+app.get('/api/link-suggestions/bulk-certain-preview', requireAssistant, ah(async (req, res) => {
+  const rows = (await reviewQueueBase()).filter(r => r.bestConfidence === 'CERTAIN');
+  const linkCount = rows.reduce((sum, r) => sum + r.candidateCount, 0);
+  res.json({ documentCount: rows.length, linkCount });
+}));
+
+app.post('/api/link-suggestions/bulk-certain', requireAssistant, ah(async (req, res) => {
+  const rows = (await reviewQueueBase()).filter(r => r.bestConfidence === 'CERTAIN');
+  let linked = 0;
+  for (const row of rows) {
+    const suggs = await prisma.linkSuggestion.findMany({ where: { documentId: row.documentId, confidence: 'CERTAIN', status: 'PENDING' } });
+    for (const s of suggs) {
+      const existing = await prisma.skuLink.findFirst({ where: { documentId: row.documentId, skuId: s.skuId } });
+      if (!existing) {
+        await prisma.skuLink.create({ data: {
+          skuId: s.skuId, docType: 'DOCUMENT', documentId: row.documentId, visibleToCustomer: false,
+          approvalStatus: 'APPROVED', isRawMaterial: false, reviewedById: req.user.id || null, reviewedAt: new Date(),
+        }});
+        linked++;
+      }
+      await prisma.linkSuggestion.update({ where: { id: s.id }, data: { status: 'APPROVED', decidedById: req.user.id || null, decidedAt: new Date() } });
+    }
+  }
+  res.json({ ok: true, documentsLinked: rows.length, linksCreated: linked });
+}));
+
+app.get('/api/link-suggestions/:id', requireAssistant, ah(async (req, res) => {
+  const documentId = parseInt(req.params.id);
+  const r = await prisma.docIdentification.findUnique({ where: { documentId }, include: { document: { select: { id: true, title: true, docExt: true, createdAt: true } } } });
+  if (!r) return res.status(404).json({ error: 'לא נמצא זיהוי למסמך זה' });
+  const suggestions = await prisma.linkSuggestion.findMany({ where: { documentId }, include: { sku: true }, orderBy: { id: 'asc' } });
+  const rank = { CERTAIN: 3, LIKELY: 2, POSSIBLE: 1 };
+  suggestions.sort((a, b) => rank[b.confidence] - rank[a.confidence]);
+  res.json({
+    document: { id: r.document.id, title: r.document.title, docExt: r.document.docExt, createdAt: r.document.createdAt },
+    identification: {
+      docKind: r.docKind, certNo: r.certNo, requestNo: r.requestNo, products: r.products,
+      manufacturer: r.manufacturer, kashrutBody: r.kashrutBody, track: r.track,
+      validUntil: r.validUntil, productionDate: r.productionDate, lots: r.lots,
+    },
+    candidates: suggestions.map(s => ({
+      skuId: s.skuId, code: s.sku.code, name: s.sku.name, supplier: s.sku.supplier || '',
+      kashrutBodyRef: s.sku.kashrutBodyRef || '', pesachStatusRef: s.sku.pesachStatusRef || '',
+      confidence: s.confidence, reasons: s.reasons, status: s.status,
+      preChecked: s.confidence === 'CERTAIN',
+    })),
+  });
+}));
+
+app.post('/api/link-suggestions/:id/link', requireAssistant, ah(async (req, res) => {
+  const documentId = parseInt(req.params.id);
+  const skuIds = (req.body.skuIds || []).map(Number).filter(Boolean);
+  if (!skuIds.length) return res.status(400).json({ error: 'לא נבחרו מק"טים' });
+  let created = 0;
+  for (const skuId of skuIds) {
+    const existing = await prisma.skuLink.findFirst({ where: { documentId, skuId } });
+    if (!existing) {
+      await prisma.skuLink.create({ data: {
+        skuId, docType: 'DOCUMENT', documentId, visibleToCustomer: false,
+        approvalStatus: 'APPROVED', isRawMaterial: false, reviewedById: req.user.id || null, reviewedAt: new Date(),
+      }});
+      created++;
+    }
+  }
+  const allSuggestions = await prisma.linkSuggestion.findMany({ where: { documentId } });
+  for (const s of allSuggestions) {
+    await prisma.linkSuggestion.update({
+      where: { id: s.id },
+      data: { status: skuIds.includes(s.skuId) ? 'APPROVED' : 'REJECTED', decidedById: req.user.id || null, decidedAt: new Date() },
+    });
+  }
+  res.json({ ok: true, linksCreated: created });
+}));
+
+app.post('/api/link-suggestions/:id/no-sku-needed', requireAssistant, ah(async (req, res) => {
+  const documentId = parseInt(req.params.id);
+  const { reason } = req.body;
+  if (!NO_SKU_REASONS.includes(reason)) return res.status(400).json({ error: 'סיבה לא חוקית' });
+  await prisma.document.update({ where: { id: documentId }, data: { noSkuNeeded: true, noSkuNeededReason: reason } });
+  res.json({ ok: true });
+}));
+
+app.get('/api/link-suggestions/resolve-sku/:code', requireAssistant, ah(async (req, res) => {
+  const sku = await prisma.sku.findUnique({ where: { code: req.params.code } });
+  if (!sku) return res.status(404).json({ error: 'מק"ט לא נמצא' });
+  res.json({ skuId: sku.id });
+}));
+
+app.get('/api/link-suggestions/doc-lookup/:id', requireAssistant, ah(async (req, res) => {
+  const d = await prisma.document.findUnique({ where: { id: parseInt(req.params.id) }, select: { id: true, title: true, docExt: true, archived: true } });
+  if (!d) return res.status(404).json({ error: 'מסמך לא נמצא' });
+  res.json(d);
+}));
+
+app.post('/api/link-suggestions/:id/mark-duplicate', requireAssistant, ah(async (req, res) => {
+  const documentId = parseInt(req.params.id);
+  const duplicateOfId = parseInt(req.body.duplicateOfId);
+  if (!duplicateOfId) return res.status(400).json({ error: 'לא צוין מסמך מקור' });
+  const original = await prisma.document.findUnique({ where: { id: duplicateOfId } });
+  if (!original) return res.status(404).json({ error: 'מסמך המקור לא נמצא' });
+  await prisma.document.update({ where: { id: documentId }, data: { duplicateOfId } });
+  res.json({ ok: true });
+}));
+
+app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
+
+app.listen(PORT, () => {
+  console.log(`\n מאגר מסמכים פועל על http://localhost:${PORT}`);
+  console.log(`  כניסת מנהל: admin / 1234 (אם זו הרצה ראשונה)\n`);
+});

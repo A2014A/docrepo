@@ -40,7 +40,12 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 .stats-bar{background:var(--bg2);border-bottom:1px solid var(--border);padding:.75rem 2rem;display:flex;gap:2rem;align-items:center;justify-content:center;flex-wrap:wrap;}
 .stat-item{font-size:.875rem;color:var(--ink2);display:flex;gap:6px;align-items:center;} .stat-item strong{color:var(--ink);font-weight:700;}
 .main{max-width:1200px;margin:0 auto;padding:2rem;display:grid;grid-template-columns:230px 1fr;gap:2rem;align-items:start;}
-.sidebar{position:sticky;top:80px;}
+.sidebar{position:sticky;top:80px;max-height:calc(100vh - 100px);overflow-y:auto;scrollbar-width:thin;}
+.sidebar::-webkit-scrollbar{width:8px;}
+.sidebar::-webkit-scrollbar-thumb{background:#ccc;border-radius:4px;}
+.sidebar-arrow{position:sticky;display:none;width:100%;text-align:center;background:#fff;border:none;cursor:pointer;padding:3px 0;font-size:11px;color:var(--ink3);z-index:2;line-height:1.4;}
+.sidebar-arrow-up{top:0;}
+.sidebar-arrow-down{bottom:0;}
 .sidebar-section{margin-bottom:1.5rem;}
 .sidebar-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--ink3);margin-bottom:.75rem;}
 .tag-list{display:flex;flex-direction:column;gap:3px;}
@@ -139,7 +144,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--ink);color:#fff;padding:11px 22px;border-radius:50px;font-size:.875rem;box-shadow:var(--shadow-lg);opacity:0;transition:all .3s;pointer-events:none;z-index:500;white-space:nowrap;}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-@media(max-width:768px){.main{grid-template-columns:1fr;padding:1rem;}.sidebar{position:static;}.hero{padding:2rem 1rem 3rem;}.hero h1{font-size:1.6rem;}.file-form-body{grid-template-columns:1fr;}}
+@media(max-width:768px){.main{grid-template-columns:1fr;padding:1rem;}.sidebar{position:static;max-height:none;overflow-y:visible;}.sidebar-arrow{display:none !important;}.hero{padding:2rem 1rem 3rem;}.hero h1{font-size:1.6rem;}.file-form-body{grid-template-columns:1fr;}}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -169,7 +174,8 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 <div class="stats-bar" id="statsBar"><div class="stat-item"><strong>—</strong> מסמכים</div></div>
 
 <main class="main">
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebarEl">
+    <button class="sidebar-arrow sidebar-arrow-up" id="sidebarArrowUp" onclick="scrollSidebarBy(-150)" aria-label="גלול למעלה">▲</button>
     <div class="sidebar-section">
       <div class="sidebar-title">סוג מסמך</div>
       <div class="tag-list" id="doctypeList"></div>
@@ -184,10 +190,12 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openSkuManager()">⚙ ניהול מקטים</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRawMaterials()">🧪 ניהול אישור חמרי גלם</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRawMaterialsRegistry()">📋 מאגר חומרי גלם (חדש)</button>
+      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openLinkSuggestions()">🔗 הצעות קישור</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRoleCodes()">🔑 ניהול קודי גישה</button>
       <button class="btn btn-outline" id="unlinkedToggleBtn" style="width:100%;padding:8px;margin-top:8px" onclick="toggleUnlinkedFilter()">🔗 מסמכים לא מקושרים למקט</button>
     </div>
+    <button class="sidebar-arrow sidebar-arrow-down" id="sidebarArrowDown" onclick="scrollSidebarBy(150)" aria-label="גלול למטה">▼</button>
   </aside>
   <section>
     <div class="content-header">
@@ -205,6 +213,8 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 
 <div id="rawMaterialsPage" style="display:none"></div>
 <div id="rawMaterialsCardPage" style="display:none"></div>
+<div id="linkSuggestionsPage" style="display:none"></div>
+<div id="linkSuggestionsCardPage" style="display:none"></div>
 
 <!-- UPLOAD MODAL -->
 <div class="modal-bg" id="uploadModal">
@@ -450,6 +460,27 @@ function toggleUnlinkedFilter(){
   if(btn)btn.className='btn '+(showUnlinkedOnly?'btn-accent':'btn-outline');
   loadDocs();
 }
+
+function scrollSidebarBy(px){
+  const el=document.getElementById('sidebarEl');
+  if(el)el.scrollBy({top:px,behavior:'smooth'});
+}
+function updateSidebarArrows(){
+  const el=document.getElementById('sidebarEl');
+  const up=document.getElementById('sidebarArrowUp');
+  const down=document.getElementById('sidebarArrowDown');
+  if(!el||!up||!down)return;
+  up.style.display = el.scrollTop>4 ? 'block' : 'none';
+  down.style.display = (el.scrollTop+el.clientHeight < el.scrollHeight-4) ? 'block' : 'none';
+}
+(function(){
+  const el=document.getElementById('sidebarEl');
+  if(el)el.addEventListener('scroll',updateSidebarArrows);
+  window.addEventListener('resize',updateSidebarArrows);
+  window.addEventListener('load',updateSidebarArrows);
+  document.addEventListener('DOMContentLoaded',updateSidebarArrows);
+  setInterval(updateSidebarArrows,1000); // sidebar content changes when admin UI shows/hides
+})();
 
 async function loadTags(){
   try{
@@ -3013,5 +3044,6 @@ if ('serviceWorker' in navigator) {
 }
 </script>
 <script src="/raw-materials.js"></script>
+<script src="/link-suggestions.js"></script>
 </body>
 </html>
