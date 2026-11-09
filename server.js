@@ -2184,26 +2184,48 @@ app.post('/api/goods-receipts/preview', requireAuth, requireAdmin, upload.array(
 /* ── S3: dashboard ("לוח טיפול") home-screen cards ──
  * Read-only. Reachable as a new screen, not yet wired as the actual home
  * page (docrepo-sprint-8.11.md: "this replaces [the Google-Sheet dashboard]
- * later, once I approve"). Each card returns a count and a capped item list
- * (LIST_CAP) for the "opens a filtered list" requirement. */
-const DASHBOARD_LIST_CAP = 50;
+ * later, once I approve"). computeDashboardCards() returns every card's
+ * FULL (uncapped) item list; /cards caps it for display, /export uses the
+ * full list for one card. Category filtering only applies to cards with an
+ * unambiguous, direct Sku relation (1, 2, 3, 6, 7) -- see categoryFilterApplicable.
+ */
+const DASHBOARD_LIST_CAP = 500;
 
-app.get('/api/dashboard/cards', requireAuth, ah(async (req, res) => {
+async function computeDashboardCards(categories) {
   const today = new Date();
   const in60 = new Date(today.getTime() + 60 * 24 * 60 * 60 * 1000);
+  const catFilter = (categories && categories.length) ? { categoryName: { in: categories } } : {};
+
+  const allCategories = (await prisma.sku.findMany({
+    where: { categoryName: { not: null } }, select: { categoryName: true }, distinct: ['categoryName'],
+  })).map(r => r.categoryName).sort();
 
   // 1. מק"טי יבוא פעילים בלי תעודה בתוקף
   const importFoodActive = await prisma.sku.findMany({
-    where: { source: 'IMPORT', itemType: 'FOOD', active: true },
-    include: { links: { where: { docType: 'RABBINATE', approvalStatus: 'APPROVED' }, include: { rabbinateCert: true } } },
+    where: { source: 'IMPORT', itemType: 'FOOD', active: true, ...catFilter },
+    include: {
+      links: { include: { rabbinateCert: true } },
+      linkSuggestions: { where: { status: 'PENDING' } }, // re-sorted by real confidence rank below
+    },
   });
+  const CONF_RANK = { CERTAIN: 0, LIKELY: 1, POSSIBLE: 2 };
   const noValidCert = importFoodActive.filter(s =>
-    !s.links.some(l => l.rabbinateCert && l.rabbinateCert.expiryDate && l.rabbinateCert.expiryDate >= today));
+    !s.links.some(l => l.docType === 'RABBINATE' && l.approvalStatus === 'APPROVED' && l.rabbinateCert && l.rabbinateCert.expiryDate && l.rabbinateCert.expiryDate >= today));
+  const card1Items = noValidCert.map(s => {
+    const pending = s.linkSuggestions.slice().sort((a, b) => CONF_RANK[a.confidence] - CONF_RANK[b.confidence]);
+    const best = pending[0] || null;
+    const bucket = best ? 'PENDING_SUGGESTION' : (s.links.length === 0 && s.linkSuggestions.length === 0 ? 'NO_DOCUMENT' : 'OTHER');
+    return {
+      code: s.code, name: s.name, categoryName: s.categoryName, kashrutBodyRef: s.kashrutBodyRef, buyer: s.buyer, supplier: s.supplier,
+      bestPendingConfidence: best ? best.confidence : null, bestPendingDocumentId: best ? best.documentId : null, bucket,
+    };
+  });
 
   // 2. תעודות שפגות ב-60 יום
   const expiringLinks = await prisma.skuLink.findMany({
     where: {
       approvalStatus: 'APPROVED',
+      sku: Object.keys(catFilter).length ? catFilter : undefined,
       OR: [
         { rabbinateCert: { expiryDate: { gte: today, lte: in60 } } },
         { badatzDoc: { expiryDate: { gte: today, lte: in60 } } },
@@ -2212,90 +2234,141 @@ app.get('/api/dashboard/cards', requireAuth, ah(async (req, res) => {
     },
     include: { sku: true, rabbinateCert: true, badatzDoc: true, document: true },
   });
+  const card2Items = expiringLinks.map(l => {
+    const doc = l.rabbinateCert || l.badatzDoc || l.document;
+    return {
+      skuCode: l.sku.code, skuName: l.sku.name, categoryName: l.sku.categoryName, kashrutBodyRef: l.sku.kashrutBodyRef, buyer: l.sku.buyer, supplier: l.sku.supplier,
+      docType: l.docType, expiryDate: doc && doc.expiryDate,
+    };
+  });
 
   // 3. ייצורים לא מכוסים (from S2 -- empty until a real receipt import is approved)
-  const uncoveredReceipts = await prisma.goodsReceipt.findMany({ where: { covered: false }, include: { sku: true }, take: DASHBOARD_LIST_CAP });
-  const uncoveredReceiptsCount = await prisma.goodsReceipt.count({ where: { covered: false } });
+  const uncoveredReceipts = await prisma.goodsReceipt.findMany({
+    where: { covered: false, sku: Object.keys(catFilter).length ? catFilter : undefined },
+    include: { sku: true },
+  });
+  const card3Items = uncoveredReceipts.map(r => ({
+    skuCode: r.sku.code, skuName: r.sku.name, categoryName: r.sku.categoryName, kashrutBodyRef: r.sku.kashrutBodyRef, buyer: r.sku.buyer, supplier: r.sku.supplier,
+    receiptNo: r.receiptNo, receiptDate: r.receiptDate,
+  }));
 
-  // 4. בקשות לרבנות ממתינות (from TrackingSheetMap)
+  // 4. בקשות לרבנות ממתינות (from TrackingSheetMap) -- no direct Sku/category relation
   const pendingRequests = await prisma.trackingSheetMap.findMany({
     where: { kind: 'REQUEST', requestStatus: { startsWith: 'הוגש' } },
   });
+  const card4Items = pendingRequests.map(r => ({
+    refNumber: r.refNumber, product: r.product,
+    daysWaiting: r.submittedDate ? Math.floor((today - r.submittedDate) / (24 * 60 * 60 * 1000)) : null,
+  }));
 
-  // 5. חומרי גלם ממתינים לתשובה / נדחו
+  // 5. חומרי גלם ממתינים לתשובה / נדחו -- no direct Sku/category relation (RawMaterial<->Sku is many-to-many)
   const pendingOrRejectedRM = await prisma.rawMaterialApproval.findMany({
     where: { status: { in: ['SENT_PENDING', 'REJECTED'] } },
     include: { rawMaterial: true, kashrutBody: true },
   });
+  const card5Items = pendingOrRejectedRM.map(a => ({
+    rawMaterialId: a.rawMaterialId, rawMaterialName: a.rawMaterial.name, kashrutBodyName: a.kashrutBody.name, status: a.status,
+  }));
 
   // 6. הצעות קישור ממתינות, by confidence
   const pendingSuggestionsByConfidence = await prisma.linkSuggestion.groupBy({
-    by: ['confidence'], where: { status: 'PENDING' }, _count: true,
+    by: ['confidence'],
+    where: { status: 'PENDING', sku: Object.keys(catFilter).length ? catFilter : undefined },
+    _count: true,
   });
 
   // 7. מק"טים חדשים להשלמה (from S1/S2 origins, plus the pre-existing legacy backlog)
   const newSkusToComplete = await prisma.sku.findMany({
-    where: { reviewedAt: null, origin: { hasSome: ['priority_report', 'master_sku_import', 'goods_receipt'] } },
-    take: DASHBOARD_LIST_CAP,
+    where: { reviewedAt: null, origin: { hasSome: ['priority_report', 'master_sku_import', 'goods_receipt'] }, ...catFilter },
   });
-  const newSkusToCompleteCount = await prisma.sku.count({
-    where: { reviewedAt: null, origin: { hasSome: ['priority_report', 'master_sku_import', 'goods_receipt'] } },
-  });
+  const card7Items = newSkusToComplete.map(s => ({
+    code: s.code, name: s.name, categoryName: s.categoryName, kashrutBodyRef: s.kashrutBodyRef, buyer: s.buyer, supplier: s.supplier, origin: s.origin,
+  }));
 
-  // 8. מסמכים חדשים לא מעובדים (the L6 badge's X -- docs never run through L1)
+  // 8. מסמכים חדשים לא מעובדים (the L6 badge's X -- docs never run through L1) -- no direct category relation
   const unprocessedDocs = await prisma.document.findMany({
     where: { archived: false, hidden: false, identification: null },
     select: { id: true, title: true, createdAt: true },
-    take: DASHBOARD_LIST_CAP,
     orderBy: { createdAt: 'desc' },
   });
-  const unprocessedDocsCount = await prisma.document.count({ where: { archived: false, hidden: false, identification: null } });
+  const card8Items = unprocessedDocs.map(d => ({ id: d.id, title: d.title, createdAt: d.createdAt }));
 
-  res.json({
-    cards: [
-      {
-        id: 'import-no-cert', title: 'מק"טי יבוא פעילים בלי תעודה בתוקף', count: noValidCert.length,
-        items: noValidCert.slice(0, DASHBOARD_LIST_CAP).map(s => ({ code: s.code, name: s.name, action: 'פתח מק"ט' })),
-      },
-      {
-        id: 'expiring-60', title: 'תעודות שפגות ב-60 יום', count: expiringLinks.length,
-        items: expiringLinks.slice(0, DASHBOARD_LIST_CAP).map(l => {
-          const doc = l.rabbinateCert || l.badatzDoc || l.document;
-          return { skuCode: l.sku.code, skuName: l.sku.name, docType: l.docType, expiryDate: doc && doc.expiryDate, action: 'בקש תעודה מגוף כשרות' };
-        }),
-      },
-      {
-        id: 'uncovered-receipts', title: 'ייצורים לא מכוסים', count: uncoveredReceiptsCount,
-        items: uncoveredReceipts.map(r => ({ skuCode: r.sku.code, skuName: r.sku.name, receiptNo: r.receiptNo, receiptDate: r.receiptDate, action: 'בקש תעודה מגוף כשרות' })),
-      },
-      {
-        id: 'pending-requests', title: 'בקשות לרבנות ממתינות', count: pendingRequests.length,
-        items: pendingRequests.slice(0, DASHBOARD_LIST_CAP).map(r => ({
-          refNumber: r.refNumber, product: r.product,
-          daysWaiting: r.submittedDate ? Math.floor((today - r.submittedDate) / (24 * 60 * 60 * 1000)) : null,
-        })),
-      },
-      {
-        id: 'rm-pending-rejected', title: 'חומרי גלם ממתינים לתשובה / נדחו', count: pendingOrRejectedRM.length,
-        items: pendingOrRejectedRM.slice(0, DASHBOARD_LIST_CAP).map(a => ({
-          rawMaterialName: a.rawMaterial.name, kashrutBodyName: a.kashrutBody.name, status: a.status, action: 'קשר מסמך',
-        })),
-      },
-      {
-        id: 'pending-suggestions', title: 'הצעות קישור ממתינות', count: pendingSuggestionsByConfidence.reduce((n, g) => n + g._count, 0),
+  return {
+    allCategories,
+    cards: {
+      'import-no-cert': { title: 'מק"טי יבוא פעילים בלי תעודה בתוקף', categoryFilterApplicable: true, items: card1Items },
+      'expiring-60': { title: 'תעודות שפגות ב-60 יום', categoryFilterApplicable: true, items: card2Items },
+      'uncovered-receipts': { title: 'ייצורים לא מכוסים', categoryFilterApplicable: true, items: card3Items },
+      'pending-requests': { title: 'בקשות לרבנות ממתינות', categoryFilterApplicable: false, items: card4Items },
+      'rm-pending-rejected': { title: 'חומרי גלם ממתינים לתשובה / נדחו', categoryFilterApplicable: false, items: card5Items },
+      'pending-suggestions': {
+        title: 'הצעות קישור ממתינות', categoryFilterApplicable: true, items: [],
         byConfidence: pendingSuggestionsByConfidence.map(g => ({ confidence: g.confidence, count: g._count })),
-        items: [],
+        count: pendingSuggestionsByConfidence.reduce((n, g) => n + g._count, 0),
       },
-      {
-        id: 'new-skus', title: 'מק"טים חדשים להשלמה', count: newSkusToCompleteCount,
-        items: newSkusToComplete.map(s => ({ code: s.code, name: s.name, origin: s.origin, action: 'פתח מק"ט' })),
-      },
-      {
-        id: 'unprocessed-docs', title: 'מסמכים חדשים לא מעובדים', count: unprocessedDocsCount,
-        items: unprocessedDocs.map(d => ({ id: d.id, title: d.title, createdAt: d.createdAt, action: 'קשר מסמך' })),
-      },
-    ],
+      'new-skus': { title: 'מק"טים חדשים להשלמה', categoryFilterApplicable: true, items: card7Items },
+      'unprocessed-docs': { title: 'מסמכים חדשים לא מעובדים', categoryFilterApplicable: false, items: card8Items },
+    },
+  };
+}
+
+function dashParseCategories(req) {
+  const raw = req.query.categories;
+  if (!raw) return [];
+  return String(raw).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+app.get('/api/dashboard/cards', requireAuth, ah(async (req, res) => {
+  const categories = dashParseCategories(req);
+  const data = await computeDashboardCards(categories);
+  const cards = Object.entries(data.cards).map(([id, c]) => ({
+    id, title: c.title, categoryFilterApplicable: c.categoryFilterApplicable,
+    count: c.count !== undefined ? c.count : c.items.length,
+    byConfidence: c.byConfidence,
+    items: c.items.slice(0, DASHBOARD_LIST_CAP),
+    truncated: c.items.length > DASHBOARD_LIST_CAP,
+  }));
+  res.json({ allCategories: data.allCategories, appliedCategories: categories, cards });
+}));
+
+const DASH_EXPORT_COLUMNS = {
+  'import-no-cert': [['code','מק"ט'],['name','תיאור'],['categoryName','קטגוריה'],['kashrutBodyRef','כשרות'],['buyer','איש רכש'],['supplier','ספק'],['bestPendingConfidence','הצעת קישור ממתינה'],['bucket','מצב']],
+  'expiring-60': [['skuCode','מק"ט'],['skuName','תיאור'],['categoryName','קטגוריה'],['kashrutBodyRef','כשרות'],['buyer','איש רכש'],['supplier','ספק'],['docType','סוג מסמך'],['expiryDate','תוקף']],
+  'uncovered-receipts': [['skuCode','מק"ט'],['skuName','תיאור'],['categoryName','קטגוריה'],['kashrutBodyRef','כשרות'],['buyer','איש רכש'],['supplier','ספק'],['receiptNo','קליטה'],['receiptDate','תאריך קליטה']],
+  'pending-requests': [['refNumber','סימוכין'],['product','מוצר'],['daysWaiting','ימי המתנה']],
+  'rm-pending-rejected': [['rawMaterialName','חומר גלם'],['kashrutBodyName','גוף כשרות'],['status','סטטוס']],
+  'pending-suggestions': [['confidence','רמת ביטחון'],['count','כמות']],
+  'new-skus': [['code','מק"ט'],['name','תיאור'],['categoryName','קטגוריה'],['kashrutBodyRef','כשרות'],['buyer','איש רכש'],['supplier','ספק'],['origin','מקור']],
+  'unprocessed-docs': [['id','מזהה'],['title','כותרת'],['createdAt','נוצר']],
+};
+
+app.get('/api/dashboard/cards/:cardId/export', requireAuth, ah(async (req, res) => {
+  const XLSX = require('xlsx');
+  const categories = dashParseCategories(req);
+  const data = await computeDashboardCards(categories);
+  const card = data.cards[req.params.cardId];
+  const cols = DASH_EXPORT_COLUMNS[req.params.cardId];
+  if (!card || !cols) return res.status(404).json({ error: 'כרטיס לא נמצא' });
+
+  const rows = req.params.cardId === 'pending-suggestions' ? (card.byConfidence || []) : card.items;
+  const sheetRows = rows.map(r => {
+    const out = {};
+    for (const [field, label] of cols) {
+      let v = r[field];
+      if (Array.isArray(v)) v = v.join(', ');
+      if (v instanceof Date) v = v.toISOString().slice(0, 10);
+      out[label] = v === null || v === undefined ? '' : v;
+    }
+    return out;
   });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(sheetRows, { header: cols.map(c => c[1]) });
+  XLSX.utils.book_append_sheet(wb, ws, card.title.slice(0, 31));
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="dashboard-${req.params.cardId}.xlsx"`);
+  res.send(buf);
 }));
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));

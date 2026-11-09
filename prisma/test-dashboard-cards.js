@@ -26,10 +26,30 @@ const BASE = process.env.TEST_BASE_URL || 'http://localhost:3000';
     const body = await res.json();
     if (res.status !== 200) throw new Error('dashboard failed: ' + JSON.stringify(body));
 
+    console.log('allCategories sample:', body.allCategories.slice(0, 5), `(${body.allCategories.length} total)`);
     for (const c of body.cards) {
-      console.log(`${c.id}: count=${c.count}${c.byConfidence ? ' byConfidence=' + JSON.stringify(c.byConfidence) : ''} (items shown: ${c.items.length})`);
+      console.log(`${c.id}: count=${c.count} catFilterApplicable=${c.categoryFilterApplicable}${c.byConfidence ? ' byConfidence=' + JSON.stringify(c.byConfidence) : ''} (items shown: ${c.items.length}, truncated=${c.truncated})`);
       if (c.items.length) console.log('  sample:', JSON.stringify(c.items[0]));
     }
+
+    // bucket breakdown check for card 1
+    const card1 = body.cards.find(c => c.id === 'import-no-cert');
+    const buckets = {};
+    for (const it of card1.items) buckets[it.bucket] = (buckets[it.bucket] || 0) + 1;
+    console.log('card1 bucket breakdown:', buckets);
+
+    // category filter check: pick the first real category and confirm it narrows card1/card7
+    const cat = body.allCategories[0];
+    const resF = await fetch(BASE + '/api/dashboard/cards?categories=' + encodeURIComponent(cat), { headers: AUTH_HEADER });
+    const bodyF = await resF.json();
+    const card1F = bodyF.cards.find(c => c.id === 'import-no-cert');
+    const card4F = bodyF.cards.find(c => c.id === 'pending-requests');
+    console.log(`category filter "${cat}": card1 count ${card1.count} -> ${card1F.count} (should be <=), card4 (not applicable) count ${card4F.count} unchanged? ${card4F.count === body.cards.find(c=>c.id==='pending-requests').count}`);
+    console.log('card1F all items match category?', card1F.items.every(it => it.categoryName === cat));
+
+    // export check
+    const resExport = await fetch(BASE + '/api/dashboard/cards/import-no-cert/export', { headers: AUTH_HEADER });
+    console.log('export status:', resExport.status, 'content-type:', resExport.headers.get('content-type'), 'bytes:', (await resExport.arrayBuffer()).byteLength);
   } finally {
     await prisma.user.delete({ where: { id: testUser.id } });
     await prisma.$disconnect();
