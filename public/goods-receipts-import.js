@@ -92,6 +92,7 @@ function griRenderResults() {
       <div class="gri-counter"><b>${p.receiptGroups}</b>קבוצות קבלה (מק"ט+קליטה+תוקף)</div>
       <div class="gri-counter"><b>${p.skuCount}</b>מק"טים</div>
       <div class="gri-counter"><b>${p.newSkuCount}</b>מק"טים חדשים (לא קיימים)</div>
+      <div class="gri-counter"><b class="gri-flag">${p.uncoveredCount}</b>ייצורים לא מכוסים (מק"טי יבוא)</div>
     </div>`;
 
   html += `<div class="gri-section"><h3 style="margin-bottom:10px">תצוגה מקדימה לפי מק"ט</h3>`;
@@ -99,13 +100,20 @@ function griRenderResults() {
     html += `<div class="gri-sku-block">
       <div class="gri-sku-title">${sku.isNew ? '<span class="gri-sku-new">🆕 </span>' : ''}${jsAttr(sku.skuCode)} -- ${jsAttr(sku.skuName)}${sku.isNew ? ' (מק"ט חדש, לא קיים במערכת)' : ''}</div>
       <table class="gri-table"><thead><tr>
-        <th>קליטה</th><th>תאריך קליטה</th><th>תוקף</th><th>כמות</th><th>אצווה</th><th>תאריך יצור</th><th>תאריך יצור משוער</th><th>קובץ</th>
+        <th>קליטה</th><th>תאריך קליטה</th><th>תוקף</th><th>כמות</th><th>אצווה</th><th>תאריך יצור</th><th>תאריך יצור משוער</th><th>כיסוי</th><th>קובץ</th>
       </tr></thead><tbody>`;
     for (const r of sku.receipts) {
+      let coverageCell = '<span class="gri-hint">לא רלוונטי (לא מק"ט יבוא)</span>';
+      if (r.coverageApplicable) {
+        coverageCell = r.covered
+          ? `<span style="color:#2e9e4a">✔ מכוסה (${jsAttr(griFmt(r.coverageVia))} / ${jsAttr(griFmt(r.coverageMatchedBy))})</span>`
+          : '<span class="gri-flag">✘ לא מכוסה</span>';
+      }
       html += `<tr>
         <td>${jsAttr(griFmt(r.receiptNo))}</td><td>${jsAttr(griFmt(r.receiptDate))}</td><td>${jsAttr(griFmt(r.expiry))}</td>
         <td>${jsAttr(griFmt(r.quantity))}</td><td>${jsAttr(griFmt(r.batch))}</td><td>${jsAttr(griFmt(r.productionDate))}</td>
         <td>${r.flag ? `<span class="gri-flag" title="${jsAttr(r.flag)}">${jsAttr(griFmt(r.estimatedProductionDate))} ⚠ ${jsAttr(r.flag)}</span>` : jsAttr(griFmt(r.estimatedProductionDate))}</td>
+        <td>${coverageCell}</td>
         <td>${jsAttr(r.sourceFile)}</td>
       </tr>`;
     }

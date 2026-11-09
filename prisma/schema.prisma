@@ -202,6 +202,8 @@ model Sku {
   certRequests     CertRequest[]
   rawMaterials     SkuRawMaterial[]
   linkSuggestions  LinkSuggestion[] // added 5.11.2026 (link-suggestions L2, additive)
+  goodsReceipts    GoodsReceipt[]   // added 9.11.2026 (S2, additive)
+  shelfLifeRules   ShelfLifeRule[]  // added 9.11.2026 (S2, additive)
 
   @@index([categoryId])
 }
@@ -593,4 +595,49 @@ model TrackingSheetMap {
 
   @@index([kind, refNumber])
   @@index([sourceFile])
+}
+
+// S2 (docrepo-sprint-8.11.md, added 9.11.2026, additive): goods-receipt
+// (קבלת סחורה) import from Priority/WMS stock exports, plus the coverage
+// check ("ייצורים לא מכוסים") that is the feature's core purpose.
+model GoodsReceipt {
+  id                      Int       @id @default(autoincrement())
+  skuId                   Int
+  sku                     Sku       @relation(fields: [skuId], references: [id])
+  receiptNo               String    // קליטה
+  receiptDate             DateTime  // תאריך קליטה
+  expiry                  DateTime  // פג תוקף
+  quantity                Float     // סכום כמות עבור כל שורות המיקום של אותה קליטה+תוקף
+  batch                   String?   // אצווה
+  productionDate          DateTime? // תאריך יצור, אם קיים בקובץ
+  estimatedProductionDate DateTime? // מחושב מתוקף פחות חיי מדף, רק כשאין תאריך יצור בקובץ
+  shelfLifeMonthsUsed     Int?
+  shelfLifeFlag           String?   // "חיי מדף שגויים" כשהאומדן נופל אחרי תאריך הקליטה
+  warehouseGroup          String?   // קבוצת פריט
+  covered                 Boolean?  // תוצאת בדיקת הכיסוי (רק למק"טי יבוא) -- null = לא רלוונטי (לא מק"ט יבוא)
+  coverageVia             String?   // RABBINATE | BADATZ_CERT | BADATZ_REPORT | DOCUMENT
+  coverageMatchedBy       String?   // VALID_ON_RECEIPT_DATE | PRODUCTION_DATE | LOT
+  sourceFile              String
+  importedAt              DateTime  @default(now())
+
+  @@unique([skuId, receiptNo, expiry])
+  @@index([skuId])
+  @@index([covered])
+}
+
+// Editable per-SKU / per-category shelf-life override, used to estimate a
+// receipt's production date when the file has none. Exactly one of skuId /
+// categoryName should be set per row. Code-level defaults (category
+// "שימורים" = 36mo, product name containing "וואקום" = 24mo) are the
+// fallback when no row here matches.
+model ShelfLifeRule {
+  id           Int      @id @default(autoincrement())
+  skuId        Int?     @unique
+  sku          Sku?     @relation(fields: [skuId], references: [id])
+  categoryName String?
+  months       Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([categoryName])
 }

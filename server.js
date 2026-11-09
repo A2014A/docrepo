@@ -2037,15 +2037,61 @@ function parseWmsDate(s) {
   if (m) { const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return isNaN(dt) ? null : dt; }
   return null;
 }
-// Defaults per docrepo-sprint-8.11.md S2: canned (שימורים) = 36mo, vacuum
-// (name contains וואקום) = 24mo, else unknown. Per-SKU overrides confirmed 4.11.2026.
-const SHELF_LIFE_PER_SKU = { '13460': 36, '13459': 24, '13461': 24 };
-function shelfLifeMonthsFor(sku, fallbackName) {
-  if (sku && SHELF_LIFE_PER_SKU[sku.code] != null) return SHELF_LIFE_PER_SKU[sku.code];
+// Code-level fallback defaults per docrepo-sprint-8.11.md S2: canned
+// (שימורים) = 36mo, vacuum (name contains וואקום) = 24mo, else unknown.
+// ShelfLifeRule rows (DB-editable, seeded via prisma/seed-shelf-life-rules.js)
+// take priority over these -- per-SKU row first, then category row, then the
+// code fallback below (which also covers the name-based וואקום rule, not
+// modeled as its own DB row since it's a text pattern, not a category/SKU).
+function shelfLifeMonthsFor(sku, fallbackName, ruleBySkuId, ruleByCategory) {
+  if (sku && ruleBySkuId.has(sku.id)) return ruleBySkuId.get(sku.id);
+  if (sku && sku.categoryName && ruleByCategory.has(sku.categoryName)) return ruleByCategory.get(sku.categoryName);
   if (sku && (sku.categoryName || '').includes('שימורים')) return 36;
   const name = (sku && sku.name) || fallbackName || '';
   if (name.includes('וואקום')) return 24;
   return null;
+}
+
+function sameCalendarDate(a, b) {
+  if (!a || !b) return false;
+  return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate();
+}
+function lotMatches(batch, text) {
+  if (!batch || !text) return false;
+  return String(text).toLowerCase().includes(String(batch).toLowerCase());
+}
+// S2 coverage check (the feature's core purpose): for a receipt of an IMPORT
+// SKU, is there an APPROVED linked document that covers it?
+// - RABBINATE: the cert's expiry must still be valid on the receipt date.
+// - BADATZ_CERT / BADATZ_REPORT / DOCUMENT: match by production date
+//   (generic Document only -- BadatzDoc has none) or by LOT/batch substring.
+function checkCoverage(sku, receipt, linksBySkuId) {
+  if (!sku || sku.source !== 'IMPORT') return { applicable: false, covered: null };
+  const links = linksBySkuId.get(sku.id) || [];
+  const receiptDate = parseWmsDate(receipt.receiptDate);
+  const prodDate = parseWmsDate(receipt.productionDate) ||
+    (receipt.estimatedProductionDate ? new Date(receipt.estimatedProductionDate) : null);
+  for (const link of links) {
+    if (link.docType === 'RABBINATE' && link.rabbinateCert) {
+      if (link.rabbinateCert.expiryDate && receiptDate && link.rabbinateCert.expiryDate >= receiptDate) {
+        return { applicable: true, covered: true, via: 'RABBINATE', matchedBy: 'VALID_ON_RECEIPT_DATE' };
+      }
+    }
+    if ((link.docType === 'BADATZ_CERT' || link.docType === 'BADATZ_REPORT') && link.badatzDoc) {
+      if (lotMatches(receipt.batch, link.badatzDoc.productsText)) {
+        return { applicable: true, covered: true, via: link.docType, matchedBy: 'LOT' };
+      }
+    }
+    if (link.docType === 'DOCUMENT' && link.document) {
+      if (prodDate && sameCalendarDate(link.document.productionDate, prodDate)) {
+        return { applicable: true, covered: true, via: 'DOCUMENT', matchedBy: 'PRODUCTION_DATE' };
+      }
+      if (lotMatches(receipt.batch, `${link.document.title || ''} ${link.document.description || ''}`)) {
+        return { applicable: true, covered: true, via: 'DOCUMENT', matchedBy: 'LOT' };
+      }
+    }
+  }
+  return { applicable: true, covered: false, via: null, matchedBy: null };
 }
 
 app.post('/api/goods-receipts/preview', requireAuth, requireAdmin, upload.array('files', 20), ah(async (req, res) => {
@@ -2068,6 +2114,23 @@ app.post('/api/goods-receipts/preview', requireAuth, requireAdmin, upload.array(
   const existingSkus = await prisma.sku.findMany({ where: { code: { in: codes } } });
   const byCode = new Map(existingSkus.map(s => [s.code, s]));
 
+  const shelfRules = await prisma.shelfLifeRule.findMany();
+  const ruleBySkuId = new Map(shelfRules.filter(r => r.skuId != null).map(r => [r.skuId, r.months]));
+  const ruleByCategory = new Map(shelfRules.filter(r => r.categoryName).map(r => [r.categoryName, r.months]));
+
+  const importSkuIds = existingSkus.filter(s => s.source === 'IMPORT').map(s => s.id);
+  const linksBySkuId = new Map();
+  if (importSkuIds.length) {
+    const links = await prisma.skuLink.findMany({
+      where: { skuId: { in: importSkuIds }, approvalStatus: 'APPROVED' },
+      include: { rabbinateCert: true, badatzDoc: true, document: true },
+    });
+    for (const l of links) {
+      if (!linksBySkuId.has(l.skuId)) linksBySkuId.set(l.skuId, []);
+      linksBySkuId.get(l.skuId).push(l);
+    }
+  }
+
   // Unique key (skuCode, receiptNo, expiry): sum quantity across rows sharing it.
   const groups = new Map();
   for (const r of allRows) {
@@ -2077,9 +2140,10 @@ app.post('/api/goods-receipts/preview', requireAuth, requireAdmin, upload.array(
   }
 
   const bySkuMap = new Map();
+  let uncoveredCount = 0;
   for (const g of groups.values()) {
     const sku = byCode.get(g.skuCode) || null;
-    const months = shelfLifeMonthsFor(sku, g.skuName);
+    const months = shelfLifeMonthsFor(sku, g.skuName, ruleBySkuId, ruleByCategory);
     const expiryDate = parseWmsDate(g.expiry);
     const receiptDate = parseWmsDate(g.receiptDate);
     let estimatedProductionDate = null, flag = null;
@@ -2089,13 +2153,16 @@ app.post('/api/goods-receipts/preview', requireAuth, requireAdmin, upload.array(
       estimatedProductionDate = d.toISOString().slice(0, 10);
       if (receiptDate && d > receiptDate) flag = 'חיי מדף שגויים';
     }
+    const coverage = checkCoverage(sku, { ...g, estimatedProductionDate }, linksBySkuId);
+    if (coverage.applicable && !coverage.covered) uncoveredCount++;
     if (!bySkuMap.has(g.skuCode)) {
-      bySkuMap.set(g.skuCode, { skuCode: g.skuCode, skuName: g.skuName, existingSkuId: sku ? sku.id : null, isNew: !sku, receipts: [] });
+      bySkuMap.set(g.skuCode, { skuCode: g.skuCode, skuName: g.skuName, existingSkuId: sku ? sku.id : null, isNew: !sku, source: sku ? sku.source : null, receipts: [] });
     }
     bySkuMap.get(g.skuCode).receipts.push({
       receiptNo: g.receiptNo, receiptDate: g.receiptDate, expiry: g.expiry, quantity: g.quantity,
       batch: g.batch, productionDate: g.productionDate, shelfLifeMonthsUsed: months,
       estimatedProductionDate, flag, sourceFile: g.sourceFile,
+      coverageApplicable: coverage.applicable, covered: coverage.covered, coverageVia: coverage.via, coverageMatchedBy: coverage.matchedBy,
     });
   }
 
@@ -2108,6 +2175,7 @@ app.post('/api/goods-receipts/preview', requireAuth, requireAdmin, upload.array(
     receiptGroups: groups.size,
     skuCount: bySku.length,
     newSkuCount: newSkus.length,
+    uncoveredCount,
     bySku,
     newSkus,
   });
