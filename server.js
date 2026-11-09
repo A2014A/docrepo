@@ -2181,6 +2181,123 @@ app.post('/api/goods-receipts/preview', requireAuth, requireAdmin, upload.array(
   });
 }));
 
+/* ── S3: dashboard ("לוח טיפול") home-screen cards ──
+ * Read-only. Reachable as a new screen, not yet wired as the actual home
+ * page (docrepo-sprint-8.11.md: "this replaces [the Google-Sheet dashboard]
+ * later, once I approve"). Each card returns a count and a capped item list
+ * (LIST_CAP) for the "opens a filtered list" requirement. */
+const DASHBOARD_LIST_CAP = 50;
+
+app.get('/api/dashboard/cards', requireAuth, ah(async (req, res) => {
+  const today = new Date();
+  const in60 = new Date(today.getTime() + 60 * 24 * 60 * 60 * 1000);
+
+  // 1. מק"טי יבוא פעילים בלי תעודה בתוקף
+  const importFoodActive = await prisma.sku.findMany({
+    where: { source: 'IMPORT', itemType: 'FOOD', active: true },
+    include: { links: { where: { docType: 'RABBINATE', approvalStatus: 'APPROVED' }, include: { rabbinateCert: true } } },
+  });
+  const noValidCert = importFoodActive.filter(s =>
+    !s.links.some(l => l.rabbinateCert && l.rabbinateCert.expiryDate && l.rabbinateCert.expiryDate >= today));
+
+  // 2. תעודות שפגות ב-60 יום
+  const expiringLinks = await prisma.skuLink.findMany({
+    where: {
+      approvalStatus: 'APPROVED',
+      OR: [
+        { rabbinateCert: { expiryDate: { gte: today, lte: in60 } } },
+        { badatzDoc: { expiryDate: { gte: today, lte: in60 } } },
+        { document: { expiryDate: { gte: today, lte: in60 } } },
+      ],
+    },
+    include: { sku: true, rabbinateCert: true, badatzDoc: true, document: true },
+  });
+
+  // 3. ייצורים לא מכוסים (from S2 -- empty until a real receipt import is approved)
+  const uncoveredReceipts = await prisma.goodsReceipt.findMany({ where: { covered: false }, include: { sku: true }, take: DASHBOARD_LIST_CAP });
+  const uncoveredReceiptsCount = await prisma.goodsReceipt.count({ where: { covered: false } });
+
+  // 4. בקשות לרבנות ממתינות (from TrackingSheetMap)
+  const pendingRequests = await prisma.trackingSheetMap.findMany({
+    where: { kind: 'REQUEST', requestStatus: { startsWith: 'הוגש' } },
+  });
+
+  // 5. חומרי גלם ממתינים לתשובה / נדחו
+  const pendingOrRejectedRM = await prisma.rawMaterialApproval.findMany({
+    where: { status: { in: ['SENT_PENDING', 'REJECTED'] } },
+    include: { rawMaterial: true, kashrutBody: true },
+  });
+
+  // 6. הצעות קישור ממתינות, by confidence
+  const pendingSuggestionsByConfidence = await prisma.linkSuggestion.groupBy({
+    by: ['confidence'], where: { status: 'PENDING' }, _count: true,
+  });
+
+  // 7. מק"טים חדשים להשלמה (from S1/S2 origins, plus the pre-existing legacy backlog)
+  const newSkusToComplete = await prisma.sku.findMany({
+    where: { reviewedAt: null, origin: { hasSome: ['priority_report', 'master_sku_import', 'goods_receipt'] } },
+    take: DASHBOARD_LIST_CAP,
+  });
+  const newSkusToCompleteCount = await prisma.sku.count({
+    where: { reviewedAt: null, origin: { hasSome: ['priority_report', 'master_sku_import', 'goods_receipt'] } },
+  });
+
+  // 8. מסמכים חדשים לא מעובדים (the L6 badge's X -- docs never run through L1)
+  const unprocessedDocs = await prisma.document.findMany({
+    where: { archived: false, hidden: false, identification: null },
+    select: { id: true, title: true, createdAt: true },
+    take: DASHBOARD_LIST_CAP,
+    orderBy: { createdAt: 'desc' },
+  });
+  const unprocessedDocsCount = await prisma.document.count({ where: { archived: false, hidden: false, identification: null } });
+
+  res.json({
+    cards: [
+      {
+        id: 'import-no-cert', title: 'מק"טי יבוא פעילים בלי תעודה בתוקף', count: noValidCert.length,
+        items: noValidCert.slice(0, DASHBOARD_LIST_CAP).map(s => ({ code: s.code, name: s.name, action: 'פתח מק"ט' })),
+      },
+      {
+        id: 'expiring-60', title: 'תעודות שפגות ב-60 יום', count: expiringLinks.length,
+        items: expiringLinks.slice(0, DASHBOARD_LIST_CAP).map(l => {
+          const doc = l.rabbinateCert || l.badatzDoc || l.document;
+          return { skuCode: l.sku.code, skuName: l.sku.name, docType: l.docType, expiryDate: doc && doc.expiryDate, action: 'בקש תעודה מגוף כשרות' };
+        }),
+      },
+      {
+        id: 'uncovered-receipts', title: 'ייצורים לא מכוסים', count: uncoveredReceiptsCount,
+        items: uncoveredReceipts.map(r => ({ skuCode: r.sku.code, skuName: r.sku.name, receiptNo: r.receiptNo, receiptDate: r.receiptDate, action: 'בקש תעודה מגוף כשרות' })),
+      },
+      {
+        id: 'pending-requests', title: 'בקשות לרבנות ממתינות', count: pendingRequests.length,
+        items: pendingRequests.slice(0, DASHBOARD_LIST_CAP).map(r => ({
+          refNumber: r.refNumber, product: r.product,
+          daysWaiting: r.submittedDate ? Math.floor((today - r.submittedDate) / (24 * 60 * 60 * 1000)) : null,
+        })),
+      },
+      {
+        id: 'rm-pending-rejected', title: 'חומרי גלם ממתינים לתשובה / נדחו', count: pendingOrRejectedRM.length,
+        items: pendingOrRejectedRM.slice(0, DASHBOARD_LIST_CAP).map(a => ({
+          rawMaterialName: a.rawMaterial.name, kashrutBodyName: a.kashrutBody.name, status: a.status, action: 'קשר מסמך',
+        })),
+      },
+      {
+        id: 'pending-suggestions', title: 'הצעות קישור ממתינות', count: pendingSuggestionsByConfidence.reduce((n, g) => n + g._count, 0),
+        byConfidence: pendingSuggestionsByConfidence.map(g => ({ confidence: g.confidence, count: g._count })),
+        items: [],
+      },
+      {
+        id: 'new-skus', title: 'מק"טים חדשים להשלמה', count: newSkusToCompleteCount,
+        items: newSkusToComplete.map(s => ({ code: s.code, name: s.name, origin: s.origin, action: 'פתח מק"ט' })),
+      },
+      {
+        id: 'unprocessed-docs', title: 'מסמכים חדשים לא מעובדים', count: unprocessedDocsCount,
+        items: unprocessedDocs.map(d => ({ id: d.id, title: d.title, createdAt: d.createdAt, action: 'קשר מסמך' })),
+      },
+    ],
+  });
+}));
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname,'public','index.html')));
 
 app.listen(PORT, () => {
