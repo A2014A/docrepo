@@ -339,6 +339,8 @@ function dashBuildPreviewOverlay() {
       <button class="btn btn-outline" onclick="dashClosePreview()">→ חזרה</button>
       <span id="dashPreviewPos" style="color:#888;font-size:13px"></span>
       <span style="margin-right:auto"></span>
+      <button class="btn btn-outline" onclick="dashOpenArchivePanel()">🗄 העבר לארכיון</button>
+      <button class="btn btn-outline" onclick="dashTrashCurrent()">🗑 העבר לפח</button>
       <button class="btn btn-outline" onclick="dashPreviewPrev()" title="הקודם (↑)">↑</button>
       <button class="btn btn-outline" onclick="dashPreviewNext()" title="הבא (↓)">↓</button>
     </div>
@@ -391,6 +393,31 @@ async function dashLoadPreviewDoc(documentId) {
   dashPreviewRenderRight();
 }
 
+// Best-effort validity: L1's validUntil, else a date pattern found in the
+// title/filename, else "unknown". Red badge when the date is in the past.
+function dashExtractDateFromTitle(title) {
+  if (!title) return null;
+  const m = title.match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/);
+  if (!m) return null;
+  let [, d, mo, y] = m;
+  if (y.length === 2) y = '20' + y;
+  const dt = new Date(Date.UTC(+y, +mo - 1, +d));
+  return isNaN(dt) ? null : dt;
+}
+function dashPreviewValidityHtml() {
+  const d = DASH_PREVIEW_DATA;
+  const id = d.identification;
+  let validUntil = id && id.validUntil ? new Date(id.validUntil) : null;
+  let guessed = false;
+  if (!validUntil) { validUntil = dashExtractDateFromTitle(d.document.title); guessed = true; }
+  if (!validUntil) return `<div style="font-size:20px;font-weight:700;margin-bottom:10px;color:#888">תוקף לא ידוע</div>`;
+  const isPast = validUntil < new Date();
+  return `<div style="font-size:20px;font-weight:700;margin-bottom:10px">
+    תוקף: ${dashFmtDate(validUntil)}${guessed ? ' <span style="font-size:12px;color:#888;font-weight:400">(משוער משם הקובץ)</span>' : ''}
+    ${isPast ? '<span style="background:#c0612f;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:10px;margin-right:8px">⚠ פג תוקף</span>' : ''}
+  </div>`;
+}
+
 function dashPreviewRenderLeft() {
   const d = DASH_PREVIEW_DATA;
   const id = d.identification;
@@ -407,17 +434,18 @@ function dashPreviewRenderLeft() {
     <div class="dash-field"><b>יצרן:</b> ${jsAttr(id.manufacturer || '—')}</div>
     <div class="dash-field"><b>גוף כשרות:</b> ${jsAttr(id.kashrutBody || '—')}</div>
     <div class="dash-field"><b>מסלול:</b> ${jsAttr(id.track || '—')}</div>
-    <div class="dash-field"><b>תוקף:</b> ${dashFmtDate(id.validUntil)}</div>
     <div class="dash-field"><b>תאריך יצור:</b> ${dashFmtDate(id.productionDate)}</div>
     ${lots ? `<div class="dash-field"><b>LOT:</b> ${jsAttr(lots)}</div>` : ''}`;
   })();
   left.innerHTML = `
-    <h3 style="margin-bottom:10px">${jsAttr(d.document.title || '')}</h3>
+    <h3 style="margin-bottom:6px">${jsAttr(d.document.title || '')}</h3>
+    ${dashPreviewValidityHtml()}
     ${idHtml}
     <h4 style="margin:14px 0 8px">מק"טים מועמדים</h4>
     <div id="dashPreviewCands"></div>
     <div style="margin-top:10px;padding:10px;background:#f7f7f7;border-radius:8px">${skuSearchWidgetHtml('dashprev')}</div>
-    <div style="margin-top:8px;color:#888;font-size:11px">✘ דחה הוא סימון מקומי בלבד -- אין נתיב כתיבה נפרד לדחייה. ברגע שתלחצו ✔ קשר על מועמד כלשהו, כל מה שלא אושר באותו רגע יסומן כנדחה בפועל (זו ההתנהגות הקיימת של /link, בדיוק כמו במסך "הצעות קישור").</div>`;
+    <div style="margin-top:8px;color:#888;font-size:11px">✘ דחה הוא סימון מקומי בלבד -- אין נתיב כתיבה נפרד לדחייה. ברגע שתלחצו "✓ קשר", כל מה שלא סומן ✔ יסומן כנדחה בפועל (זו ההתנהגות הקיימת של /link, בדיוק כמו במסך "הצעות קישור").</div>
+    <div id="dashArchivePanel"></div>`;
   skuSearchBind('dashprev', dashPreviewPickManualSku);
   dashPreviewRenderCandidates();
 }
@@ -425,34 +453,55 @@ function dashPreviewRenderLeft() {
 function dashPreviewRenderCandidates() {
   const el = document.getElementById('dashPreviewCands');
   const cands = DASH_PREVIEW_DATA.candidates;
-  if (!cands.length) { el.innerHTML = '<p style="color:#888">אין הצעות אוטומטיות למסמך זה.</p>'; return; }
   const confColor = { CERTAIN: '#2e9e4a', LIKELY: '#d9a429', POSSIBLE: '#c0612f' };
-  el.innerHTML = cands.map(c => {
+  const cardsHtml = cands.length ? cands.map(c => {
     const accepted = DASH_PREVIEW_ACCEPTED.has(c.skuId);
     const rejected = DASH_PREVIEW_REJECTED.has(c.skuId);
     return `<div class="dash-cand-card ${accepted ? 'accepted' : ''} ${rejected ? 'rejected' : ''}">
       <div><b>${jsAttr(c.code)}</b> — ${jsAttr(c.name)} <span style="font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;background:${confColor[c.confidence] || '#999'}">${jsAttr(c.confidence)}</span></div>
       <div style="font-size:12px;color:#666">${jsAttr(c.supplier || '')}${c.supplier && c.kashrutBodyRef ? ' · ' : ''}${jsAttr(c.kashrutBodyRef || '')}</div>
       <div class="dash-cand-actions">
-        <button onclick="dashPreviewAccept(${c.skuId})">✔ קשר</button>
+        <button onclick="dashPreviewToggleAccept(${c.skuId})">${accepted ? '✓ מסומן (לחיצה לביטול)' : '✔ קשר'}</button>
         <button onclick="dashPreviewReject(${c.skuId})">✘ דחה</button>
       </div>
     </div>`;
-  }).join('');
+  }).join('') : '<p style="color:#888">אין הצעות אוטומטיות למסמך זה. אפשר להוסיף ידנית בעזרת החיפוש שלמטה.</p>';
+
+  const n = DASH_PREVIEW_ACCEPTED.size;
+  const submitLabel = n === 0 ? '✓ קשר (לא סומנו מק"טים)' : n === 1 ? '✓ קשר למק"ט אחד' : `✓ קשר ל-${n} מק"טים`;
+  el.innerHTML = cardsHtml + `
+    <button class="btn btn-accent" style="width:100%;margin-top:10px" ${n ? '' : 'disabled'} onclick="dashPreviewSubmitAll()">${submitLabel}</button>`;
 }
 
+// One ticked chip per click -- multiple SKUs can be queued before a single
+// "✓ קשר" submits all of them together in one /link call (one cert can
+// cover several products).
 function dashPreviewPickManualSku(sku) {
   if (DASH_PREVIEW_DATA.candidates.some(c => c.skuId === sku.skuId)) { showToast('מק"ט זה כבר ברשימת המועמדים'); return; }
   DASH_PREVIEW_DATA.candidates.push({ skuId: sku.skuId, code: sku.code, name: sku.name, supplier: '', kashrutBodyRef: sku.kashrutBodyRef || '', confidence: 'POSSIBLE', reasons: { manual: true } });
   DASH_PREVIEW_ACCEPTED.add(sku.skuId);
   DASH_PREVIEW_REJECTED.delete(sku.skuId);
-  document.getElementById('sks_results_dashprev').innerHTML = '';
+  const input = document.getElementById('sks_input_dashprev');
+  if (input) { input.value = ''; input.focus(); }
+  const results = document.getElementById('sks_results_dashprev');
+  if (results) results.innerHTML = '';
   dashPreviewRenderCandidates();
 }
 
-async function dashPreviewAccept(skuId) {
-  DASH_PREVIEW_ACCEPTED.add(skuId);
-  DASH_PREVIEW_REJECTED.delete(skuId);
+function dashPreviewToggleAccept(skuId) {
+  if (DASH_PREVIEW_ACCEPTED.has(skuId)) DASH_PREVIEW_ACCEPTED.delete(skuId);
+  else { DASH_PREVIEW_ACCEPTED.add(skuId); DASH_PREVIEW_REJECTED.delete(skuId); }
+  dashPreviewRenderCandidates();
+}
+
+function dashPreviewReject(skuId) {
+  DASH_PREVIEW_REJECTED.add(skuId);
+  DASH_PREVIEW_ACCEPTED.delete(skuId);
+  dashPreviewRenderCandidates();
+}
+
+async function dashPreviewSubmitAll() {
+  if (!DASH_PREVIEW_ACCEPTED.size) return;
   try {
     const result = await fetch(API + '/api/link-suggestions/' + DASH_PREVIEW_CURRENT_ID + '/link', {
       method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
@@ -463,10 +512,39 @@ async function dashPreviewAccept(skuId) {
   } catch (e) { showToast(e.message); }
 }
 
-function dashPreviewReject(skuId) {
-  DASH_PREVIEW_REJECTED.add(skuId);
-  DASH_PREVIEW_ACCEPTED.delete(skuId);
-  dashPreviewRenderCandidates();
+function dashOpenArchivePanel() {
+  const panel = document.getElementById('dashArchivePanel');
+  if (!panel) return;
+  const reasons = ['תעודה ישנה', 'כפילות', 'לא רלוונטי לחברה'];
+  panel.innerHTML = `
+    <div style="margin-top:10px;padding:10px;background:#fff7ed;border-radius:8px">
+      <div style="margin-bottom:6px;font-size:13px">העברה לארכיון -- בחר סיבה (אופציונלי):</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+        ${reasons.map(r => `<button class="btn btn-outline" onclick='dashArchiveCurrent("${jsAttr(r)}")'>${jsAttr(r)}</button>`).join('')}
+      </div>
+      <input id="dashArchiveReasonInput" placeholder="או כתוב סיבה חופשית (לא חובה)..." style="width:100%;padding:6px;margin-bottom:6px"/>
+      <button class="btn btn-accent" onclick="dashArchiveCurrent(document.getElementById('dashArchiveReasonInput').value)">אשר העברה לארכיון</button>
+      <button class="btn btn-outline" onclick="document.getElementById('dashArchivePanel').innerHTML=''">ביטול</button>
+    </div>`;
+}
+
+async function dashArchiveCurrent(reason) {
+  try {
+    await fetch(API + '/api/docs/' + DASH_PREVIEW_CURRENT_ID + '/archive', {
+      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason || null }),
+    });
+    showToast('המסמך הועבר לארכיון');
+    await dashPreviewAfterSubmit();
+  } catch (e) { showToast(e.message); }
+}
+
+async function dashTrashCurrent() {
+  if (!confirm('להעביר את המסמך לפח? ניתן לשחזר מאוחר יותר ממסך "🗑 פח".')) return;
+  try {
+    await fetch(API + '/api/docs/' + DASH_PREVIEW_CURRENT_ID + '/trash', { method: 'POST', headers: authHeaders() });
+    showToast('המסמך הועבר לפח');
+    await dashPreviewAfterSubmit();
+  } catch (e) { showToast(e.message); }
 }
 
 function dashPreviewRemoveCurrentFromList() {

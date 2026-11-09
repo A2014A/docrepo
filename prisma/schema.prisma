@@ -260,6 +260,12 @@ model Document {
   duplicateOf     Document?  @relation("DocumentDuplicateOf", fields: [duplicateOfId], references: [id])
   duplicates      Document[] @relation("DocumentDuplicateOf")
 
+  // Dashboard preview-panel fix (added 9.11.2026, additive): soft delete
+  // only -- never deletes the file or the DB row. Trashed documents are
+  // excluded from the main lists/counts and appear only in the "🗑 פח"
+  // screen, with a restore action.
+  trashedAt       DateTime?
+
   links SkuLink[]
   rawMaterialDocuments   RawMaterialDocument[]
   rawMaterialDefaultFor  RawMaterial[]           @relation("RawMaterialDefaultDoc")

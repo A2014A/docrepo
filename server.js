@@ -196,6 +196,7 @@ function docOut(d, ctx) {
     hidden: d.hidden,
     uploader: uploaderUser ? uploaderUser.email : '',
     created_at: d.createdAt.toISOString(),
+    trashedAt: d.trashedAt ? d.trashedAt.toISOString() : null,
   };
 }
 
@@ -495,7 +496,7 @@ app.get('/api/skus/report', requireAuth, ah(async (req, res) => {
 /* ── STATS ── */
 app.get('/api/stats', ah(async (req, res) => {
   const admin = isAdminReq(req);
-  const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
+  const docs = await prisma.document.findMany({ where: { ...(admin ? {} : { hidden: false }), trashedAt: null } });
   const tags  = new Set(docs.flatMap(d => d.tags || []));
   const types = new Set(docs.map(d => d.docExt).filter(Boolean));
   const linkedIds = new Set(
@@ -509,7 +510,7 @@ app.get('/api/stats', ah(async (req, res) => {
 /* ── TAGS ── */
 app.get('/api/tags', ah(async (req, res) => {
   const admin = isAdminReq(req);
-  const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
+  const docs = await prisma.document.findMany({ where: { ...(admin ? {} : { hidden: false }), trashedAt: null } });
   const map = {};
   docs.forEach(d => (d.tags||[]).forEach(t => { map[t] = (map[t]||0)+1; }));
   res.json(Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([tag,count])=>({ tag, count })));
@@ -518,7 +519,7 @@ app.get('/api/tags', ah(async (req, res) => {
 /* ── DOCTYPES ── */
 app.get('/api/doctypes', ah(async (req, res) => {
   const admin = isAdminReq(req);
-  const docs = await prisma.document.findMany({ where: admin ? {} : { hidden: false } });
+  const docs = await prisma.document.findMany({ where: { ...(admin ? {} : { hidden: false }), trashedAt: null } });
   const map = {};
   docs.forEach(d => { if (d.docType) map[d.docType] = (map[d.docType]||0)+1; });
   res.json(Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([doctype,count])=>({ doctype, count })));
@@ -528,7 +529,7 @@ app.get('/api/doctypes', ah(async (req, res) => {
 app.get('/api/docs', ah(async (req, res) => {
   const { q, tag, doctype, sort = 'date-desc', unlinked } = req.query;
   const admin = isAdminReq(req);
-  const where = {};
+  const where = { trashedAt: null };
   if (!admin) where.hidden = false;
   if (tag && tag !== 'הכל') where.tags = { has: tag };
   if (doctype && doctype !== 'הכל') where.docType = doctype;
@@ -650,6 +651,40 @@ app.patch('/api/docs/:id', requireAssistant, ah(async (req, res) => {
       });
     }
   }
+  res.json(docOut(updated, await batchDocContext([updated.id])));
+}));
+
+/* ── Dashboard preview-panel fix: archive / trash (soft delete) / restore ── */
+app.post('/api/docs/:id/archive', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const doc = await prisma.document.findUnique({ where: { id } });
+  if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
+  const updated = await prisma.document.update({ where: { id }, data: { archived: true, archivedReason: req.body.reason || null } });
+  res.json(docOut(updated, await batchDocContext([updated.id])));
+}));
+
+// Soft delete only -- never removes the file or the DB row. Excluded from
+// the main lists/counts (see trashedAt: null filters below); visible only
+// in GET /api/docs/trash, restorable via /restore.
+app.post('/api/docs/:id/trash', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const doc = await prisma.document.findUnique({ where: { id } });
+  if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
+  const updated = await prisma.document.update({ where: { id }, data: { trashedAt: new Date() } });
+  res.json(docOut(updated, await batchDocContext([updated.id])));
+}));
+
+app.get('/api/docs/trash', requireAuth, requireAdmin, ah(async (req, res) => {
+  const docs = await prisma.document.findMany({ where: { trashedAt: { not: null } }, orderBy: { trashedAt: 'desc' } });
+  const ctx = await batchDocContext(docs.map(d => d.id));
+  res.json(docs.map(d => docOut(d, ctx)));
+}));
+
+app.post('/api/docs/:id/restore', requireAuth, requireAdmin, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const doc = await prisma.document.findUnique({ where: { id } });
+  if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
+  const updated = await prisma.document.update({ where: { id }, data: { trashedAt: null } });
   res.json(docOut(updated, await batchDocContext([updated.id])));
 }));
 
@@ -1665,7 +1700,7 @@ async function reviewQueueBase() {
   // no-sku-needed, not a known duplicate -- per L0/L4 these are excluded
   // from the unlinked count and the review queue.
   const idents = await prisma.docIdentification.findMany({
-    where: { document: { links: { none: {} }, archived: false, noSkuNeeded: false, duplicateOfId: null } },
+    where: { document: { links: { none: {} }, archived: false, noSkuNeeded: false, duplicateOfId: null, trashedAt: null } },
     include: { document: { select: { id: true, title: true, docExt: true, createdAt: true } } },
   });
   const suggestions = await prisma.linkSuggestion.groupBy({
@@ -2296,7 +2331,7 @@ async function computeDashboardCards(categories) {
       OR: [
         { rabbinateCert: { expiryDate: { gte: today, lte: in60 } } },
         { badatzDoc: { expiryDate: { gte: today, lte: in60 } } },
-        { document: { expiryDate: { gte: today, lte: in60 } } },
+        { document: { expiryDate: { gte: today, lte: in60 }, trashedAt: null } },
       ],
     },
     include: { sku: true, rabbinateCert: true, badatzDoc: true, document: true },
@@ -2354,7 +2389,7 @@ async function computeDashboardCards(categories) {
 
   // 8. מסמכים חדשים לא מעובדים (the L6 badge's X -- docs never run through L1) -- no direct category relation
   const unprocessedDocs = await prisma.document.findMany({
-    where: { archived: false, hidden: false, identification: null },
+    where: { archived: false, hidden: false, trashedAt: null, identification: null },
     select: { id: true, title: true, createdAt: true },
     orderBy: { createdAt: 'desc' },
   });
