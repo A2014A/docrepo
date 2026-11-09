@@ -245,6 +245,73 @@ app.get('/api/skus', ah(async (req, res) => {
   res.json(skus.map(skuOut));
 }));
 
+// Rich multi-field SKU search ("SKU search everywhere" -- link-suggestions
+// screen + the dashboard document-preview panel). Quotes/gershayim are
+// REMOVED (not replaced by a space), so "ק"ג"/"חו"ג" collapse to "קג"/"חוג"
+// contiguously -- same collapseMatres normalization as the L2 engine
+// (prisma/run-l2-suggestions.js) so "ק"ג" and "קג" are treated the same.
+function skuSearchNormalize(s) {
+  if (!s) return '';
+  let t = s.toString().toLowerCase();
+  t = t.replace(/["'״׳]/g, '');          // strip quotes WITHOUT inserting a space
+  t = t.replace(/[.,()-]/g, ' ');
+  t = t.replace(/יי+/g, 'י').replace(/וו+/g, 'ו'); // collapseMatres, same as L2
+  return t.replace(/\s+/g, ' ').trim();
+}
+app.get('/api/skus/search', requireAuth, ah(async (req, res) => {
+  const q = (req.query.q || '').trim();
+  const includeNotProduct = req.query.includeNotProduct === '1' || req.query.includeNotProduct === 'true';
+  if (q.length < 2) return res.json([]);
+
+  const words = skuSearchNormalize(q).split(' ').filter(Boolean);
+  if (!words.length) return res.json([]);
+
+  const [skus, aliases] = await Promise.all([
+    prisma.sku.findMany({ where: includeNotProduct ? {} : { itemType: { not: 'NOT_PRODUCT' } } }),
+    prisma.supplierAlias.findMany(),
+  ]);
+  const aliasBySupplier = new Map();
+  for (const a of aliases) {
+    const key = skuSearchNormalize(a.supplierName);
+    if (!aliasBySupplier.has(key)) aliasBySupplier.set(key, []);
+    aliasBySupplier.get(key).push(a.manufacturerName);
+  }
+  function manufacturersFor(sku) {
+    const out = [];
+    for (const supplierRaw of [sku.supplier, sku.supplier2]) {
+      if (!supplierRaw) continue;
+      const ns = skuSearchNormalize(supplierRaw);
+      for (const [aliasKey, names] of aliasBySupplier) {
+        if (aliasKey && (ns.includes(aliasKey) || aliasKey.includes(ns))) out.push(...names);
+      }
+    }
+    return out;
+  }
+
+  const qExact = skuSearchNormalize(q);
+  const scored = [];
+  for (const s of skus) {
+    const corpus = skuSearchNormalize([s.code, s.name, s.supplier, s.supplier2, s.categoryName, ...manufacturersFor(s)].filter(Boolean).join(' '));
+    // Fallback: also check the whitespace-squashed corpus, so a query word
+    // typed without a space ("25קג") still matches a name that has one
+    // ("25 ק"ג" -> normalized "25 קג").
+    const corpusSquashed = corpus.replace(/\s+/g, '');
+    if (!words.every(w => corpus.includes(w) || corpusSquashed.includes(w))) continue;
+    const codeNorm = skuSearchNormalize(s.code);
+    const nameNorm = skuSearchNormalize(s.name);
+    let rank = 3;
+    if (codeNorm === qExact) rank = 0;
+    else if (codeNorm.startsWith(qExact) || nameNorm.startsWith(qExact)) rank = 1;
+    else if (nameNorm.includes(qExact)) rank = 2;
+    scored.push({ sku: s, rank });
+  }
+  scored.sort((a, b) => a.rank - b.rank || a.sku.code.localeCompare(b.sku.code));
+
+  res.json(scored.slice(0, 20).map(({ sku: s }) => ({
+    skuId: s.id, code: s.code, name: s.name, kashrutBodyRef: s.kashrutBodyRef, categoryName: s.categoryName, itemType: s.itemType,
+  })));
+}));
+
 app.post('/api/skus', requireAuth, ah(async (req, res) => {
   const { id, name, supplier, supplier2, tipus, source, responsible, kashrus, pesach, notes, certType } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'חסרים מספר ושם' });

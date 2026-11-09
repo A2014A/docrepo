@@ -342,32 +342,17 @@ async function lsSubmitDuplicate(duplicateOfId) {
 
 function lsOpenOtherSkuSearch() {
   const panel = document.getElementById('lsExtraPanel');
-  panel.innerHTML = `
-    <div style="margin-top:10px;padding:10px;background:#f7f7f7;border-radius:8px">
-      <input id="lsSkuSearchInput" placeholder="חפש לפי מק\\"ט / שם / יצרן..." style="width:100%;padding:6px" oninput="lsRunSkuSearch()"/>
-      <div id="lsSkuSearchResults" style="max-height:220px;overflow-y:auto;margin-top:6px"></div>
-    </div>`;
-  document.getElementById('lsSkuSearchInput').focus();
+  panel.innerHTML = `<div style="margin-top:10px;padding:10px;background:#f7f7f7;border-radius:8px">${skuSearchWidgetHtml('ls')}</div>`;
+  skuSearchBind('ls', lsAddManualSku);
 }
 
-let LS_ALL_SKUS = null;
-async function lsRunSkuSearch() {
-  if (!LS_ALL_SKUS) LS_ALL_SKUS = await apiFetch('/api/skus?all=1');
-  const q = document.getElementById('lsSkuSearchInput').value.trim().toLowerCase();
-  const results = document.getElementById('lsSkuSearchResults');
-  if (!q) { results.innerHTML = ''; return; }
-  const matches = LS_ALL_SKUS.filter(s => (s.id + ' ' + s.name + ' ' + s.supplier).toLowerCase().includes(q)).slice(0, 25);
-  results.innerHTML = matches.map(s => `<div style="padding:4px 0;cursor:pointer" onclick="lsAddManualSku('${jsAttr(s.id)}')"><b>${jsAttr(s.id)}</b> ${jsAttr(s.name)} <span style="color:#888">${jsAttr(s.supplier)}</span></div>`).join('') || '<div style="color:#888">אין תוצאות</div>';
-}
-
-async function lsAddManualSku(code) {
-  // sku.id in the frontend shape is actually the SKU CODE (string); resolve to the real numeric id via the lookup endpoint data already in memory.
-  const match = LS_ALL_SKUS.find(s => s.id === code);
-  if (!match) return;
-  const resolved = await apiFetch('/api/link-suggestions/resolve-sku/' + encodeURIComponent(code)).catch(() => null);
-  if (!resolved) { showToast('לא ניתן להוסיף מק"ט זה'); return; }
-  LS_CARD_DATA.candidates.push({ skuId: resolved.skuId, code: match.id, name: match.name, supplier: match.supplier, kashrutBodyRef: match.kashrus, pesachStatusRef: match.pesach, confidence: 'POSSIBLE', reasons: { manual: true }, preChecked: false });
-  LS_SELECTED.add(resolved.skuId);
+function lsAddManualSku(sku) {
+  if (LS_CARD_DATA.candidates.some(c => c.skuId === sku.skuId)) { showToast('מק"ט זה כבר ברשימת המועמדים'); return; }
+  LS_CARD_DATA.candidates.push({
+    skuId: sku.skuId, code: sku.code, name: sku.name, supplier: '', kashrutBodyRef: sku.kashrutBodyRef || '', pesachStatusRef: '',
+    confidence: 'POSSIBLE', reasons: { manual: true }, preChecked: false,
+  });
+  LS_SELECTED.add(sku.skuId);
   document.getElementById('lsExtraPanel').innerHTML = '';
   lsRenderSkuCards();
 }

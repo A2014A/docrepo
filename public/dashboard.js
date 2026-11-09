@@ -12,6 +12,18 @@ let DASH_OPEN_CARD = null;
 let DASH_SELECTED_CATEGORIES = new Set();
 let DASH_CARD1_QUICK_FILTER = 'ALL'; // ALL | NO_DOCUMENT | PENDING_SUGGESTION | OTHER
 
+// Document preview panel (task: "document preview in the dashboard lists").
+// Reuses the existing /api/link-suggestions/:id GET and .../:id/link POST --
+// no new write route. ACCEPTED/REJECTED are local toggle state; REJECTED by
+// itself never writes anything (the existing /link endpoint requires a
+// non-empty skuIds array), it only shapes what the *next* ✔ submit excludes.
+let DASH_PREVIEW_DOC_LIST = [];
+let DASH_PREVIEW_CURRENT_ID = null;
+let DASH_PREVIEW_DATA = null;
+let DASH_PREVIEW_SOURCE_CARD = null;
+let DASH_PREVIEW_ACCEPTED = new Set();
+let DASH_PREVIEW_REJECTED = new Set();
+
 const DASH_COL_LABELS = {
   code: 'מק"ט', name: 'תיאור', skuCode: 'מק"ט', skuName: 'תיאור',
   categoryName: 'קטגוריה', kashrutBodyRef: 'כשרות', buyer: 'איש רכש', supplier: 'ספק',
@@ -59,6 +71,24 @@ function dashInjectStyles() {
     .dash-row-actions button{font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid #ccc;background:#fff;cursor:pointer;white-space:nowrap}
     .dash-row-actions button:hover{background:#f0f0f0}
     @media (max-width:600px){.dash-grid{grid-template-columns:repeat(2,1fr)}.dash-card b{font-size:22px}}
+
+    .dash-preview-overlay{position:fixed;inset:0;background:#fff;z-index:100;display:flex;flex-direction:column}
+    .dash-preview-topbar{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #eee;flex-shrink:0}
+    .dash-preview-body{flex:1;display:flex;overflow:hidden}
+    .dash-preview-left{width:380px;flex-shrink:0;overflow-y:auto;padding:16px;border-left:1px solid #eee}
+    .dash-preview-right{flex:1;background:#525659;display:flex;align-items:center;justify-content:center}
+    .dash-preview-right iframe,.dash-preview-right img{width:100%;height:100%;border:none;object-fit:contain}
+    .dash-field{margin-bottom:6px;font-size:13px}
+    .dash-cand-card{border:1px solid #eee;border-radius:8px;padding:8px;margin-bottom:8px}
+    .dash-cand-card.accepted{border-color:#2e9e4a;background:#f3fbf5}
+    .dash-cand-card.rejected{opacity:.45;text-decoration:line-through}
+    .dash-cand-actions{display:flex;gap:6px;margin-top:6px}
+    .dash-cand-actions button{font-size:12px;padding:3px 10px;border-radius:6px;border:1px solid #ccc;background:#fff;cursor:pointer}
+    @media (max-width:800px){
+      .dash-preview-body{flex-direction:column}
+      .dash-preview-left{width:auto;border-left:none;border-bottom:1px solid #eee;max-height:50vh}
+      .dash-preview-right{flex:1}
+    }
   `;
   document.head.appendChild(style);
 }
@@ -182,7 +212,7 @@ function dashRowActions(cardId, it) {
   if (it.skuCode) btns.push(`<button onclick='dashOpenSku("${jsAttr(it.skuCode)}")'>פתח מק"ט</button>`);
   if (cardId === 'import-no-cert') {
     if (it.bucket === 'PENDING_SUGGESTION' && it.bestPendingDocumentId) {
-      btns.push(`<button onclick='dashOpenSuggestionDoc(${it.bestPendingDocumentId})'>קשר מסמך</button>`);
+      btns.push(`<button onclick='dashOpenDocPreview(${it.bestPendingDocumentId})'>👁 צפה</button>`);
     } else {
       btns.push(`<button onclick='dashRequestCert("${jsAttr(it.code)}","${jsAttr(it.name || '')}")'>בקש תעודה מגוף כשרות</button>`);
     }
@@ -194,7 +224,7 @@ function dashRowActions(cardId, it) {
     btns.push(`<button onclick='dashOpenRawMaterial(${it.rawMaterialId})'>קשר מסמך</button>`);
   }
   if (cardId === 'unprocessed-docs') {
-    btns.push(`<button onclick='dashOpenSuggestionDoc(${it.id})'>קשר מסמך</button>`);
+    btns.push(`<button onclick='dashOpenDocPreview(${it.id})'>👁 צפה</button>`);
   }
   if (cardId === 'new-skus') {
     btns.push(`<button onclick='dashUnmarkNew("${jsAttr(it.code)}")'>הסר סימון חדש</button>`);
@@ -206,10 +236,6 @@ function dashOpenSku(code) {
   openSkuManager();
   const input = document.getElementById('skuListSearch');
   if (input) { input.value = code; loadSkuList(); }
-}
-async function dashOpenSuggestionDoc(documentId) {
-  await openLinkSuggestions();
-  lsOpenCard(documentId);
 }
 async function dashOpenRawMaterial(rawMaterialId) {
   await openRawMaterialsRegistry();
@@ -286,4 +312,214 @@ async function dashExport(cardId) {
     a.click();
     URL.revokeObjectURL(url);
   } catch (e) { showToast(e.message); }
+}
+
+/* ---------- document preview panel ---------- */
+// Side-by-side on a wide screen, full screen with a "→ חזרה" back button on
+// a phone (see .dash-preview-overlay / .dash-preview-left media query).
+// Arrow up/down navigates the SAME list the row was opened from (respecting
+// the active quick filter), scoped per source card.
+
+function dashPreviewBuildNavList() {
+  const card = DASH_DATA.cards.find(c => c.id === DASH_OPEN_CARD);
+  if (!card) return [];
+  const items = dashVisibleItems(card);
+  if (card.id === 'import-no-cert') return items.filter(it => it.bucket === 'PENDING_SUGGESTION').map(it => it.bestPendingDocumentId);
+  if (card.id === 'unprocessed-docs') return items.map(it => it.id);
+  return [];
+}
+
+function dashBuildPreviewOverlay() {
+  if (document.getElementById('dashPreviewOverlay')) return;
+  const ov = document.createElement('div');
+  ov.id = 'dashPreviewOverlay';
+  ov.className = 'dash-preview-overlay';
+  ov.innerHTML = `
+    <div class="dash-preview-topbar">
+      <button class="btn btn-outline" onclick="dashClosePreview()">→ חזרה</button>
+      <span id="dashPreviewPos" style="color:#888;font-size:13px"></span>
+      <span style="margin-right:auto"></span>
+      <button class="btn btn-outline" onclick="dashPreviewPrev()" title="הקודם (↑)">↑</button>
+      <button class="btn btn-outline" onclick="dashPreviewNext()" title="הבא (↓)">↓</button>
+    </div>
+    <div class="dash-preview-body">
+      <div class="dash-preview-left" id="dashPreviewLeft"></div>
+      <div class="dash-preview-right" id="dashPreviewRight"></div>
+    </div>`;
+  document.body.appendChild(ov);
+}
+
+async function dashOpenDocPreview(documentId) {
+  DASH_PREVIEW_SOURCE_CARD = DASH_OPEN_CARD;
+  DASH_PREVIEW_DOC_LIST = dashPreviewBuildNavList();
+  if (!DASH_PREVIEW_DOC_LIST.includes(documentId)) DASH_PREVIEW_DOC_LIST.unshift(documentId);
+  dashBuildPreviewOverlay();
+  if (!window._dashPreviewKeyBound) { document.addEventListener('keydown', dashPreviewKeyHandler); window._dashPreviewKeyBound = true; }
+  await dashLoadPreviewDoc(documentId);
+}
+
+function dashClosePreview() {
+  const ov = document.getElementById('dashPreviewOverlay');
+  if (ov) ov.remove();
+  DASH_PREVIEW_DATA = null;
+  DASH_PREVIEW_CURRENT_ID = null;
+}
+
+async function dashLoadPreviewDoc(documentId) {
+  DASH_PREVIEW_CURRENT_ID = documentId;
+  DASH_PREVIEW_ACCEPTED = new Set();
+  DASH_PREVIEW_REJECTED = new Set();
+  try {
+    const res = await fetch(API + '/api/link-suggestions/' + documentId, { headers: authHeaders() });
+    if (res.status === 404) {
+      // No L1 identification yet (e.g. "מסמכים חדשים לא מעובדים" -- by
+      // definition never run through L1). Fall back to a bare document view;
+      // manual linking still works through the same /link route below.
+      const doc = await fetch(API + '/api/link-suggestions/doc-lookup/' + documentId, { headers: authHeaders() }).then(r => r.json());
+      DASH_PREVIEW_DATA = { document: doc, identification: null, candidates: [] };
+    } else if (!res.ok) {
+      throw new Error('שגיאה בטעינת המסמך');
+    } else {
+      DASH_PREVIEW_DATA = await res.json();
+    }
+  } catch (e) { showToast(e.message); dashClosePreview(); return; }
+  for (const c of DASH_PREVIEW_DATA.candidates) if (c.preChecked) DASH_PREVIEW_ACCEPTED.add(c.skuId);
+  const idx = DASH_PREVIEW_DOC_LIST.indexOf(documentId);
+  const posEl = document.getElementById('dashPreviewPos');
+  if (posEl) posEl.textContent = idx >= 0 ? `${idx + 1} / ${DASH_PREVIEW_DOC_LIST.length}` : '';
+  dashPreviewRenderLeft();
+  dashPreviewRenderRight();
+}
+
+function dashPreviewRenderLeft() {
+  const d = DASH_PREVIEW_DATA;
+  const id = d.identification;
+  const left = document.getElementById('dashPreviewLeft');
+  const idHtml = !id ? `
+    <div class="dash-field" style="color:#c0612f">⚠ מסמך זה עדיין לא עבר זיהוי אוטומטי (L1) -- אין הצעות קישור אוטומטיות. אפשר לקשר ידנית למק"ט בעזרת החיפוש שלמטה.</div>` : (() => {
+    const products = Array.isArray(id.products) ? id.products.join(', ') : '';
+    const lots = Array.isArray(id.lots) ? id.lots.join(', ') : '';
+    return `
+    <div class="dash-field"><b>סוג מסמך:</b> ${jsAttr(id.docKind || '—')}</div>
+    <div class="dash-field"><b>מספר תעודה:</b> ${jsAttr(id.certNo || '—')}</div>
+    <div class="dash-field"><b>מספר בקשה:</b> ${jsAttr(id.requestNo || '—')}</div>
+    <div class="dash-field"><b>מוצר:</b> ${jsAttr(products || '—')}</div>
+    <div class="dash-field"><b>יצרן:</b> ${jsAttr(id.manufacturer || '—')}</div>
+    <div class="dash-field"><b>גוף כשרות:</b> ${jsAttr(id.kashrutBody || '—')}</div>
+    <div class="dash-field"><b>מסלול:</b> ${jsAttr(id.track || '—')}</div>
+    <div class="dash-field"><b>תוקף:</b> ${dashFmtDate(id.validUntil)}</div>
+    <div class="dash-field"><b>תאריך יצור:</b> ${dashFmtDate(id.productionDate)}</div>
+    ${lots ? `<div class="dash-field"><b>LOT:</b> ${jsAttr(lots)}</div>` : ''}`;
+  })();
+  left.innerHTML = `
+    <h3 style="margin-bottom:10px">${jsAttr(d.document.title || '')}</h3>
+    ${idHtml}
+    <h4 style="margin:14px 0 8px">מק"טים מועמדים</h4>
+    <div id="dashPreviewCands"></div>
+    <div style="margin-top:10px;padding:10px;background:#f7f7f7;border-radius:8px">${skuSearchWidgetHtml('dashprev')}</div>
+    <div style="margin-top:8px;color:#888;font-size:11px">✘ דחה הוא סימון מקומי בלבד -- אין נתיב כתיבה נפרד לדחייה. ברגע שתלחצו ✔ קשר על מועמד כלשהו, כל מה שלא אושר באותו רגע יסומן כנדחה בפועל (זו ההתנהגות הקיימת של /link, בדיוק כמו במסך "הצעות קישור").</div>`;
+  skuSearchBind('dashprev', dashPreviewPickManualSku);
+  dashPreviewRenderCandidates();
+}
+
+function dashPreviewRenderCandidates() {
+  const el = document.getElementById('dashPreviewCands');
+  const cands = DASH_PREVIEW_DATA.candidates;
+  if (!cands.length) { el.innerHTML = '<p style="color:#888">אין הצעות אוטומטיות למסמך זה.</p>'; return; }
+  const confColor = { CERTAIN: '#2e9e4a', LIKELY: '#d9a429', POSSIBLE: '#c0612f' };
+  el.innerHTML = cands.map(c => {
+    const accepted = DASH_PREVIEW_ACCEPTED.has(c.skuId);
+    const rejected = DASH_PREVIEW_REJECTED.has(c.skuId);
+    return `<div class="dash-cand-card ${accepted ? 'accepted' : ''} ${rejected ? 'rejected' : ''}">
+      <div><b>${jsAttr(c.code)}</b> — ${jsAttr(c.name)} <span style="font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;background:${confColor[c.confidence] || '#999'}">${jsAttr(c.confidence)}</span></div>
+      <div style="font-size:12px;color:#666">${jsAttr(c.supplier || '')}${c.supplier && c.kashrutBodyRef ? ' · ' : ''}${jsAttr(c.kashrutBodyRef || '')}</div>
+      <div class="dash-cand-actions">
+        <button onclick="dashPreviewAccept(${c.skuId})">✔ קשר</button>
+        <button onclick="dashPreviewReject(${c.skuId})">✘ דחה</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function dashPreviewPickManualSku(sku) {
+  if (DASH_PREVIEW_DATA.candidates.some(c => c.skuId === sku.skuId)) { showToast('מק"ט זה כבר ברשימת המועמדים'); return; }
+  DASH_PREVIEW_DATA.candidates.push({ skuId: sku.skuId, code: sku.code, name: sku.name, supplier: '', kashrutBodyRef: sku.kashrutBodyRef || '', confidence: 'POSSIBLE', reasons: { manual: true } });
+  DASH_PREVIEW_ACCEPTED.add(sku.skuId);
+  DASH_PREVIEW_REJECTED.delete(sku.skuId);
+  document.getElementById('sks_results_dashprev').innerHTML = '';
+  dashPreviewRenderCandidates();
+}
+
+async function dashPreviewAccept(skuId) {
+  DASH_PREVIEW_ACCEPTED.add(skuId);
+  DASH_PREVIEW_REJECTED.delete(skuId);
+  try {
+    const result = await fetch(API + '/api/link-suggestions/' + DASH_PREVIEW_CURRENT_ID + '/link', {
+      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skuIds: [...DASH_PREVIEW_ACCEPTED] }),
+    }).then(r => r.json());
+    showToast(`קושרו ${result.linksCreated} מק"טים`);
+    await dashPreviewAfterSubmit();
+  } catch (e) { showToast(e.message); }
+}
+
+function dashPreviewReject(skuId) {
+  DASH_PREVIEW_REJECTED.add(skuId);
+  DASH_PREVIEW_ACCEPTED.delete(skuId);
+  dashPreviewRenderCandidates();
+}
+
+function dashPreviewRemoveCurrentFromList() {
+  const removedId = DASH_PREVIEW_CURRENT_ID;
+  const card = DASH_DATA.cards.find(c => c.id === DASH_PREVIEW_SOURCE_CARD);
+  if (card) {
+    if (card.id === 'import-no-cert') card.items = card.items.filter(it => it.bestPendingDocumentId !== removedId);
+    else if (card.id === 'unprocessed-docs') card.items = card.items.filter(it => it.id !== removedId);
+    card.count = card.items.length;
+  }
+  const idx = DASH_PREVIEW_DOC_LIST.indexOf(removedId);
+  if (idx >= 0) DASH_PREVIEW_DOC_LIST.splice(idx, 1);
+  return idx;
+}
+
+async function dashPreviewAfterSubmit() {
+  const idx = dashPreviewRemoveCurrentFromList();
+  dashRenderGrid(); // updates the underlying card/list counts behind the overlay
+  if (!DASH_PREVIEW_DOC_LIST.length) { showToast('אין עוד מסמכים ברשימה'); dashClosePreview(); return; }
+  const nextIdx = Math.min(Math.max(idx, 0), DASH_PREVIEW_DOC_LIST.length - 1);
+  await dashLoadPreviewDoc(DASH_PREVIEW_DOC_LIST[nextIdx]);
+}
+
+function dashPreviewRenderRight() {
+  const right = document.getElementById('dashPreviewRight');
+  const d = DASH_PREVIEW_DATA.document;
+  const ext = (d.docExt || '').toLowerCase();
+  right.innerHTML = '<p style="color:#fff">טוען...</p>';
+  fetch(API + '/api/docs/' + d.id + '/download?inline=1', { headers: authHeaders() })
+    .then(r => r.blob())
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      if (ext === 'pdf') right.innerHTML = `<iframe src="${url}#toolbar=1&navpanes=0"></iframe>`;
+      else if (['png', 'jpg', 'jpeg', 'gif'].includes(ext)) right.innerHTML = `<img src="${url}"/>`;
+      else right.innerHTML = `<div style="color:#fff;padding:20px">תצוגה מקדימה לא נתמכת לסוג קובץ זה (.${ext}). <a href="${url}" target="_blank" style="color:#9cf">הורדה</a></div>`;
+    })
+    .catch(() => { right.innerHTML = '<div style="color:#fff;padding:20px">שגיאה בטעינת המסמך</div>'; });
+}
+
+function dashPreviewNext() {
+  const idx = DASH_PREVIEW_DOC_LIST.indexOf(DASH_PREVIEW_CURRENT_ID);
+  if (idx >= 0 && idx + 1 < DASH_PREVIEW_DOC_LIST.length) dashLoadPreviewDoc(DASH_PREVIEW_DOC_LIST[idx + 1]);
+  else showToast('הגעת לסוף הרשימה');
+}
+function dashPreviewPrev() {
+  const idx = DASH_PREVIEW_DOC_LIST.indexOf(DASH_PREVIEW_CURRENT_ID);
+  if (idx > 0) dashLoadPreviewDoc(DASH_PREVIEW_DOC_LIST[idx - 1]);
+}
+function dashPreviewKeyHandler(e) {
+  if (!document.getElementById('dashPreviewOverlay')) return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return;
+  if (e.key === 'ArrowUp') { e.preventDefault(); dashPreviewPrev(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); dashPreviewNext(); }
+  else if (e.key === 'Escape') { dashClosePreview(); }
 }
