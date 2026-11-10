@@ -1088,6 +1088,34 @@ app.post('/api/raw-material-registry/:id/approvals', requireAssistant, ah(async 
 // for either. Also surfaces any PASSOVER row that exists for a body that
 // isn't (or is no longer) handlesPassover/active, so real data is never
 // hidden even if a body's flags changed after the row was created.
+// Extracted as a shared, pure function (R10, added 10.11.2026) so the
+// Excel export computes each raw material's per-body status with EXACTLY
+// the same logic as this live matrix endpoint -- no drift between what's
+// on screen and what's exported.
+function buildApprovalMatrixRows(rm, bodies, approvals) {
+  const byKey = new Map(approvals.map(a => [`${a.kashrutBodyId}|${a.track}`, a]));
+  const rows = [];
+  for (const b of bodies) {
+    const yr = byKey.get(`${b.id}|YEAR_ROUND`);
+    if (yr) rows.push(regApprovalOut(yr));
+    else if (rm.originKashrutBodyId === b.id) rows.push(regComputedOriginApproval(rm.id, b, 'YEAR_ROUND', 'APPROVED'));
+    else rows.push(regNotSentPlaceholder(rm.id, b, 'YEAR_ROUND'));
+
+    if (b.handlesPassover) {
+      const ps = byKey.get(`${b.id}|PASSOVER`);
+      if (ps) rows.push(regApprovalOut(ps));
+      else if (rm.originKashrutBodyId === b.id && ['PASSOVER', 'PASSOVER_KITNIYOT'].includes(rm.originPassoverStatus))
+        rows.push(regComputedOriginApproval(rm.id, b, 'PASSOVER', rm.originPassoverStatus === 'PASSOVER' ? 'APPROVED' : 'APPROVED_KITNIYOT'));
+      else rows.push(regNotSentPlaceholder(rm.id, b, 'PASSOVER'));
+    }
+  }
+  const shownIds = new Set(rows.map(r => r.id).filter(idv => idv != null));
+  for (const a of approvals) {
+    if (a.track === 'PASSOVER' && !shownIds.has(a.id)) rows.push(regApprovalOut(a));
+  }
+  return rows;
+}
+
 app.get('/api/raw-materials/:id/approvals', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const rm = await prisma.rawMaterial.findUnique({ where: { id } });
@@ -1096,28 +1124,93 @@ app.get('/api/raw-materials/:id/approvals', requireAssistant, ah(async (req, res
     prisma.kashrutBody.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
     prisma.rawMaterialApproval.findMany({ where: { rawMaterialId: id }, include: { kashrutBody: true, contact: true } }),
   ]);
-  const byKey = new Map(approvals.map(a => [`${a.kashrutBodyId}|${a.track}`, a]));
+  const rows = buildApprovalMatrixRows(rm, bodies, approvals);
+  res.json(rows);
+}));
 
-  const rows = [];
-  for (const b of bodies) {
-    const yr = byKey.get(`${b.id}|YEAR_ROUND`);
-    if (yr) rows.push(regApprovalOut(yr));
-    else if (rm.originKashrutBodyId === b.id) rows.push(regComputedOriginApproval(id, b, 'YEAR_ROUND', 'APPROVED'));
-    else rows.push(regNotSentPlaceholder(id, b, 'YEAR_ROUND'));
+/* ── R10: Excel export of the (currently filtered) raw-material registry ── */
+const REG_STATUS_LABEL = {
+  NOT_SENT: 'לא נשלח', SENT_PENDING: 'ממתין לתשובה', APPROVED: 'מאושר', REJECTED: 'נדחה',
+  NEEDS_INFO: 'בקשת פרטים', CONDITIONAL: 'מאושר בתנאים', APPROVED_KITNIYOT: 'מאושר לקטניות',
+  SENT_FOR_REVIEW: 'נשלח אליך לבדיקה',
+};
+const REG_STATUS_COLOR = {
+  NOT_SENT: 'FFA09D98', SENT_PENDING: 'FFF59E0B', APPROVED: 'FF2D5A3D', REJECTED: 'FFDC2626',
+  NEEDS_INFO: 'FF7C3AED', CONDITIONAL: 'FF2563EB', APPROVED_KITNIYOT: 'FFEAB308', SENT_FOR_REVIEW: 'FFFDBA74',
+};
+const REG_TRACK_LABEL = { YEAR_ROUND: 'ימות השנה', PASSOVER: 'פסח' };
 
-    if (b.handlesPassover) {
-      const ps = byKey.get(`${b.id}|PASSOVER`);
-      if (ps) rows.push(regApprovalOut(ps));
-      else if (rm.originKashrutBodyId === b.id && ['PASSOVER', 'PASSOVER_KITNIYOT'].includes(rm.originPassoverStatus))
-        rows.push(regComputedOriginApproval(id, b, 'PASSOVER', rm.originPassoverStatus === 'PASSOVER' ? 'APPROVED' : 'APPROVED_KITNIYOT'));
-      else rows.push(regNotSentPlaceholder(id, b, 'PASSOVER'));
+app.post('/api/raw-material-registry/export', requireAssistant, ah(async (req, res) => {
+  const ExcelJS = require('exceljs');
+  const { ids } = req.body || {};
+  const where = Array.isArray(ids) && ids.length ? { id: { in: ids.map(Number) } } : {};
+  const [items, bodies] = await Promise.all([
+    prisma.rawMaterial.findMany({ where, include: REG_INCLUDE, orderBy: { name: 'asc' } }),
+    prisma.kashrutBody.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
+  ]);
+
+  const wb = new ExcelJS.Workbook();
+
+  // Sheet 1: סטטוס -- one row per raw material, two columns per active body
+  const baseCols = ['שם', 'ספק', 'יצרן', 'מק"טים מקושרים', 'כשרות מקור', 'יש תעודת מקור', 'תוקף תעודת מקור'];
+  const ws1 = wb.addWorksheet('סטטוס', { views: [{ rightToLeft: true, state: 'frozen', xSplit: 1, ySplit: 1 }] });
+  const header1 = [...baseCols, ...bodies.flatMap(b => [`${b.name} – שנה`, `${b.name} – פסח`])];
+  ws1.addRow(header1);
+  ws1.getRow(1).font = { bold: true };
+
+  for (const rm of items) {
+    const rows = buildApprovalMatrixRows(rm, bodies, rm.approvals);
+    const byBodyTrack = new Map(rows.map(r => [`${r.kashrutBodyId}|${r.track}`, r]));
+    const excelRow = ws1.addRow([
+      rm.name, rm.supplier || '', rm.manufacturer || '',
+      rm.skus.map(s => s.sku.code).join(', '),
+      rm.originKashrutText || '', rm.originHasCert ? 'כן' : 'לא',
+      rm.originCertValidUntil ? new Date(rm.originCertValidUntil).toISOString().slice(0, 10) : '',
+    ]);
+    let col = baseCols.length;
+    for (const b of bodies) {
+      col++;
+      const yr = byBodyTrack.get(`${b.id}|YEAR_ROUND`);
+      if (yr) {
+        const cell = excelRow.getCell(col);
+        cell.value = REG_STATUS_LABEL[yr.status] || yr.status;
+        if (REG_STATUS_COLOR[yr.status]) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: REG_STATUS_COLOR[yr.status] } };
+      }
+      col++;
+      const ps = byBodyTrack.get(`${b.id}|PASSOVER`);
+      if (ps) {
+        const cell = excelRow.getCell(col);
+        cell.value = (REG_STATUS_LABEL[ps.status] || ps.status) + (ps.seasonYear ? ` (${ps.seasonYear})` : '');
+        if (REG_STATUS_COLOR[ps.status]) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: REG_STATUS_COLOR[ps.status] } };
+      }
     }
   }
-  const shownIds = new Set(rows.map(r => r.id).filter(idv => idv != null));
-  for (const a of approvals) {
-    if (a.track === 'PASSOVER' && !shownIds.has(a.id)) rows.push(regApprovalOut(a));
+  ws1.getColumn(1).width = 28;
+  for (let c = 2; c <= header1.length; c++) ws1.getColumn(c).width = 18;
+
+  // Sheet 2: פירוט -- one row per real approval (skips plain NOT_SENT placeholders)
+  const ws2 = wb.addWorksheet('פירוט', { views: [{ rightToLeft: true, state: 'frozen', ySplit: 1 }] });
+  const header2 = ['שם', 'גוף', 'מסלול', 'סטטוס', 'איש קשר', 'תאריך שליחה', 'תאריך תשובה', 'תנאי/הערה', 'שנה (פסח)'];
+  ws2.addRow(header2);
+  ws2.getRow(1).font = { bold: true };
+  for (const rm of items) {
+    const rows = buildApprovalMatrixRows(rm, bodies, rm.approvals).filter(r => r.id != null || r.viaOrigin);
+    for (const r of rows) {
+      ws2.addRow([
+        rm.name, r.kashrutBodyName, REG_TRACK_LABEL[r.track] || r.track, REG_STATUS_LABEL[r.status] || r.status,
+        r.contactName || '', r.sentAt ? new Date(r.sentAt).toISOString().slice(0, 10) : '',
+        r.replyAt ? new Date(r.replyAt).toISOString().slice(0, 10) : '',
+        r.conditionText || r.notes || '', r.seasonYear || '',
+      ]);
+    }
   }
-  res.json(rows);
+  for (let c = 1; c <= header2.length; c++) ws2.getColumn(c).width = 18;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const buf = await wb.xlsx.writeBuffer();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="export.xlsx"; filename*=UTF-8''${encodeURIComponent('חומרי גלם - ' + today + '.xlsx')}`);
+  res.send(Buffer.from(buf));
 }));
 
 /* ── change an approval's status/level/condition/notes/validUntil ── */

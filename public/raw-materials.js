@@ -43,6 +43,7 @@ const RM_STATE = {
   items: [], allBodies: [], bodyById: new Map(),
   yearRoundBodies: [], passoverBodies: [],
   track: 'YEAR_ROUND', loaded: false,
+  lastFilteredIds: [], // R10: the export button exports exactly this set
 };
 
 function rmEscapeHtml(s) {
@@ -112,6 +113,7 @@ function rmBuildPageShell() {
         <button class="rm-track-btn" id="rmTrackYearRound" onclick="rmSetTrack('YEAR_ROUND')">ימות השנה</button>
         <button class="rm-track-btn" id="rmTrackPassover" onclick="rmSetTrack('PASSOVER')">פסח</button>
       </div>
+      <button class="btn btn-outline" onclick="rmExportExcel()">📥 ייצוא לאקסל</button>
     </div>
     <div class="rm-summary" id="rmSummary"></div>
     <div class="rm-color-key" id="rmColorKey"></div>
@@ -344,6 +346,25 @@ function rmApplyFilters() {
 
   rmRenderSummary(rows);
   rmRenderList(filtered);
+  RM_STATE.lastFilteredIds = filtered.map(({ item }) => item.id); // R10: export uses exactly this
+}
+
+// R10: exports exactly RM_STATE.lastFilteredIds (set by rmApplyFilters on
+// every render), so this always matches what's currently on screen.
+async function rmExportExcel() {
+  try {
+    const res = await fetch(API + '/api/raw-material-registry/export', {
+      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: RM_STATE.lastFilteredIds }),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || 'שגיאה בייצוא'); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `חומרי גלם - ${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { showToast(e.message); }
 }
 
 function rmRenderSummary(rows) {

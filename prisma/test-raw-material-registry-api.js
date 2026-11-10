@@ -262,6 +262,33 @@ async function snapshot() {
   const exportNoKey = await api('GET', '/api/export/raw-materials');
   check('GET export without API key is rejected (401) -- fail-closed since EXPORT_API_KEY is unset', exportNoKey.status === 401);
 
+  // R10: Excel export -- scoped to just this test record (ids filter), two
+  // sheets, matching the live matrix endpoint's status computation exactly.
+  const exportRes = await fetch(`${BASE}/api/raw-material-registry/export`, {
+    method: 'POST', headers: { ...AUTH_HEADER, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids: [id] }),
+  });
+  check('R10: export returns 200', exportRes.status === 200);
+  check('R10: export content-type is xlsx', (exportRes.headers.get('content-type') || '').includes('spreadsheetml'));
+  const exportBuf = Buffer.from(await exportRes.arrayBuffer());
+  const ExcelJS = require('exceljs');
+  const exportWb = new ExcelJS.Workbook();
+  await exportWb.xlsx.load(exportBuf);
+  const ws1 = exportWb.getWorksheet('סטטוס');
+  const ws2 = exportWb.getWorksheet('פירוט');
+  check('R10: sheet 1 "סטטוס" exists with a data row for the test material', ws1 && ws1.getCell('A2').value && ws1.getCell('A2').value.includes('TEST-'));
+  check('R10: sheet 2 "פירוט" exists with at least one approval row', ws2 && ws2.rowCount >= 2);
+  check('R10: sheet 1 is frozen (xSplit/ySplit)', ws1.views[0] && ws1.views[0].state === 'frozen' && ws1.views[0].xSplit === 1 && ws1.views[0].ySplit === 1);
+  // the body we sent to -> should show a colored, non-empty status cell for its year-round column
+  const bodyColHeader = ws1.getRow(1).values.find(v => typeof v === 'string' && v.includes('– שנה'));
+  check('R10: at least one body status column has a header', !!bodyColHeader);
+  let foundColoredStatusCell = false;
+  for (let c = 8; c <= ws1.columnCount; c++) {
+    const cell = ws1.getRow(2).getCell(c);
+    if (cell.value && cell.fill && cell.fill.fgColor) { foundColoredStatusCell = true; break; }
+  }
+  check('R10: at least one status cell in the test row has both a label and a fill color', foundColoredStatusCell);
+
   // ── cleanup ──
   // capture R2 keys before deleting the Document rows, so the objects
   // themselves can be removed too, not just the DB rows

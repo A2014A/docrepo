@@ -669,7 +669,56 @@ symmetry fix was needed (below), otherwise frontend only.
 Verified: 53/53 regression suite passing; confirmed the reply modal's
 served JS live over HTTP.
 
+## R10 — Excel export (done)
+
+- **New dependency: `exceljs` (^4.4.0), added with explicit approval.**
+  The already-installed `xlsx` (SheetJS Community Edition 0.18.5) cannot
+  write cell fill colors or frozen panes -- verified empirically (wrote a
+  styled cell, read it back, style was gone). Both are required by this
+  step ("cells are colored like the dots", "frozen header row and first
+  column"), so I stopped and asked before adding a library, per the
+  spec's rule. Confirmed exceljs round-trips fill colors, frozen panes,
+  and RTL correctly before building the real export.
+- **Refactored, not duplicated:** the matrix row-building logic inside
+  `GET /api/raw-materials/:id/approvals` (NOT_SENT placeholders,
+  computed-origin-approval, orphaned-Passover-row surfacing) was
+  extracted into a standalone `buildApprovalMatrixRows(rm, bodies,
+  approvals)`. The export calls the exact same function per raw material,
+  so the spreadsheet can never drift from what the live screen shows.
+- **`POST /api/raw-material-registry/export`** (body: `{ ids: [...] }`,
+  empty/absent = all): returns an .xlsx buffer.
+  - **Sheet 1 "סטטוס"**: one row per raw material. Base columns (name,
+    supplier, manufacturer, linked SKU codes, origin kashrut text, has
+    cert, cert valid-until), then two columns per active body ("<body> –
+    שנה" / "<body> – פסח"), each cell holding the Hebrew status label
+    with a fill color matching the list screen's dot colors (same
+    `RM_STATUS_COLOR` hex values, mirrored server-side since they're
+    needed at write time); the Passover cell also appends the season
+    year in parens when set. Frozen header row + first column, RTL.
+  - **Sheet 2 "פירוט"**: one row per *real* approval activity (a true DB
+    row, or a computed-origin row) -- skips the plain NOT_SENT
+    placeholders that would otherwise bloat this sheet with mostly-empty
+    rows for every body x raw-material combination. Columns: name, body,
+    track, status, contact, sent date, reply date, condition/note,
+    season year. Frozen header row.
+  - Filename: `חומרי גלם - YYYY-MM-DD.xlsx` (RFC 5987 `filename*=UTF-8''`
+    + an ASCII fallback, matching the existing doc-download pattern).
+- **List screen**: new "📥 ייצוא לאקסל" button. Exports *exactly* the
+  currently-filtered set -- `rmApplyFilters()` (all client-side: search,
+  body, status, supplier, needs-review, no-origin-cert, origin-Passover,
+  stale-days) now also stores `RM_STATE.lastFilteredIds`, which the
+  export button sends as `ids`. No server-side re-implementation of the
+  filter logic, so there's no risk of the export disagreeing with what's
+  on screen.
+
+Regression: `prisma/test-raw-material-registry-api.js` extended with 7
+checks (export 200 + xlsx content-type, sheet 1/2 exist with real data,
+frozen panes present, a body status column header exists, at least one
+status cell has both a label and a fill color) -- scoped to just the
+test record via the `ids` filter. **60/60 passing**, table-count
+snapshot confirms clean TEST- cleanup.
+
 ### Next
-R10 (Excel export) → R11 (Excel import) → R12 (bulk send) → R7
-(add-material flow) → R8 (SKU tab) → R9 (contacts/bodies settings),
-stopping after each with a browser-checkable summary.
+R11 (Excel import) → R12 (bulk send) → R7 (add-material flow) → R8 (SKU
+tab) → R9 (contacts/bodies settings), stopping after each with a
+browser-checkable summary.
