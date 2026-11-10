@@ -1609,6 +1609,125 @@ app.post('/api/raw-materials/:id/send', requireAssistant, ah(async (req, res) =>
   res.json(bodyIds.length === 1 && tracks.length === 1 ? results[0] : results);
 }));
 
+/* ── R12: bulk send -- many raw materials x many bodies x many tracks at
+ * once. Same REVIEW_EMAIL rule as the single-item /send above: EMAIL always
+ * goes to REVIEW_EMAIL first (status SENT_FOR_REVIEW, sentAt unset), never
+ * directly to the body -- "✔ הועבר לגוף" (the EXISTING confirm-forward
+ * endpoint, unchanged) is what moves it to SENT_PENDING. One email per
+ * body, listing every selected raw material in a table; if the combined
+ * attachments for a body exceed ~20MB they're split across several emails
+ * for that body (same table in each, a subset of attachments, "(חלק X/Y)"
+ * in the subject) rather than zipping, so no new dependency was needed. ── */
+app.post('/api/raw-material-registry/bulk-send', requireAssistant, ah(async (req, res) => {
+  const { rawMaterialIds, message, via, recordOnly } = req.body;
+  if (!['EMAIL', 'WHATSAPP'].includes(via)) return res.status(400).json({ error: 'ערוץ שליחה לא תקין' });
+  if (via === 'WHATSAPP' && !recordOnly)
+    return res.status(400).json({ error: 'שליחת וואטסאפ מתבצעת בצד הלקוח -- יש לקרוא כאן עם recordOnly=true לאחר אישור השליחה' });
+
+  const rmIds = Array.isArray(rawMaterialIds) ? rawMaterialIds.map(Number) : [];
+  if (!rmIds.length) return res.status(400).json({ error: 'נא לבחור חומר גלם אחד לפחות' });
+  const bodyIds = Array.isArray(req.body.kashrutBodyIds) ? req.body.kashrutBodyIds.map(Number) : [];
+  if (!bodyIds.length) return res.status(400).json({ error: 'נא לבחור גוף כשרות אחד לפחות' });
+  const tracks = Array.isArray(req.body.tracks) && req.body.tracks.length ? req.body.tracks : ['YEAR_ROUND'];
+  if (!tracks.every(t => ['YEAR_ROUND', 'PASSOVER'].includes(t))) return res.status(400).json({ error: 'מסלול לא תקין' });
+  const contactIdByBody = req.body.contactIds || {};
+
+  const materials = await prisma.rawMaterial.findMany({ where: { id: { in: rmIds } }, include: { documents: { include: { document: true } } } });
+  if (materials.length !== rmIds.length) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
+  const bodies = await prisma.kashrutBody.findMany({ where: { id: { in: bodyIds } } });
+  if (bodies.length !== bodyIds.length) return res.status(404).json({ error: 'גוף כשרות לא נמצא' });
+
+  const sendRealEmail = via === 'EMAIL' && !recordOnly;
+  const mailer = sendRealEmail ? getMailer() : null;
+  if (sendRealEmail && !mailer) return res.status(400).json({ error: 'שליחת מייל לא הוגדרה בשרת (חסר EMAIL_APP_PASSWORD)' });
+  const tracksText = tracks.length === 2 ? 'לימות השנה ולפסח' : TRACK_LABEL[tracks[0]];
+
+  const results = [];
+  const warnings = [];
+
+  for (const body of bodies) {
+    const contactId = contactIdByBody[body.id] ?? contactIdByBody[String(body.id)] ?? null;
+    const contact = contactId ? await prisma.contact.findUnique({ where: { id: parseInt(contactId) } }) : null;
+
+    if (sendRealEmail) {
+      if (!contact?.email) return res.status(400).json({ error: `נא לבחור איש קשר עם כתובת מייל לגוף ${body.name}` });
+
+      const attachmentItems = [];
+      for (const m of materials) {
+        const label = m.documents.find(d => d.docRole === 'LABEL');
+        if (label) attachmentItems.push({ material: m, doc: label.document });
+        if (tracks.includes('YEAR_ROUND') && m.originCertDocId) {
+          const certDoc = await prisma.document.findUnique({ where: { id: m.originCertDocId } });
+          if (certDoc) attachmentItems.push({ material: m, doc: certDoc });
+        }
+        if (tracks.includes('PASSOVER') && m.originPassoverCertDocId) {
+          const certDoc = await prisma.document.findUnique({ where: { id: m.originPassoverCertDocId } });
+          if (certDoc) attachmentItems.push({ material: m, doc: certDoc });
+        }
+      }
+
+      const MAX_BYTES = 20 * 1024 * 1024;
+      const buckets = [[]];
+      let bucketSize = 0;
+      for (const item of attachmentItems) {
+        const size = item.doc.sizeBytes || 0;
+        if (bucketSize + size > MAX_BYTES && buckets[buckets.length - 1].length) { buckets.push([]); bucketSize = 0; }
+        buckets[buckets.length - 1].push(item);
+        bucketSize += size;
+      }
+      if (buckets.length > 1) warnings.push(`${body.name}: הקבצים חולקו ל-${buckets.length} מיילים (מעל 20MB בקובץ אחד)`);
+
+      const tableHeader = 'שם | יצרן | כשרות מקור';
+      const tableRows = materials.map(m => `${m.name} | ${m.manufacturer || '—'} | ${m.originKashrutText || '—'}`).join('\n');
+
+      for (let bi = 0; bi < buckets.length; bi++) {
+        const bucket = buckets[bi];
+        const attachments = await Promise.all(bucket.map(async (item) => {
+          const { stream, contentType } = await getObjectStream(item.doc.fileUrl);
+          const ext = item.doc.docExt ? '.' + item.doc.docExt : '';
+          return { filename: `${item.material.name} - ${item.doc.title || 'מסמך'}${ext}`, content: stream, contentType };
+        }));
+        const partLabel = buckets.length > 1 ? ` (חלק ${bi + 1}/${buckets.length})` : '';
+        const defaultBody = `שלום,\n\nמצורפים מסמכים עבור ${materials.length} חומרי גלם, בנושא ${tracksText}:\n\n${tableHeader}\n${tableRows}\n\nבברכה,\nאחים כהן`;
+        const innerSubject = `אישור כשרות (${tracksText}) — ${materials.length} חומרי גלם${partLabel}`;
+        const headerBlock = `מיועד ל: ${contact.name} <${contact.email}> (${body.name})\n` +
+          `קבצים מצורפים: ${attachments.map(a => a.filename).join(', ')}\n\n` +
+          `--- ההודעה המוכנה להעברה לגוף הכשרות ---\n\n`;
+        await mailer.sendMail({
+          from: process.env.EMAIL_FROM, to: REVIEW_EMAIL,
+          subject: `[לבדיקה והעברה] → ${body.name} / ${contact.name} ${contact.email} – ${innerSubject}`,
+          text: headerBlock + (message || defaultBody),
+          attachments,
+        });
+      }
+    }
+
+    const newStatus = via === 'EMAIL' ? 'SENT_FOR_REVIEW' : 'SENT_PENDING';
+    const newSentAt = via === 'EMAIL' ? null : new Date();
+
+    for (const m of materials) {
+      for (const track of tracks) {
+        const approval = await prisma.rawMaterialApproval.upsert({
+          where: { rawMaterialId_kashrutBodyId_track: { rawMaterialId: m.id, kashrutBodyId: body.id, track } },
+          create: { rawMaterialId: m.id, kashrutBodyId: body.id, track, contactId: contact ? contact.id : null, status: newStatus, sentAt: newSentAt, sentVia: via, sentDocIds: [] },
+          update: { contactId: contact ? contact.id : null, status: newStatus, sentAt: newSentAt, sentVia: via, sentDocIds: [] },
+          include: { kashrutBody: true, contact: true },
+        });
+        await prisma.rawMaterialApprovalEvent.create({
+          data: {
+            approvalId: approval.id, type: 'SENT', toStatus: newStatus,
+            payload: { via, recordOnly: !!recordOnly, bulk: true, contactId: contact ? contact.id : null, reviewEmail: via === 'EMAIL' ? REVIEW_EMAIL : undefined },
+            byUserId: req.user.id || null,
+          },
+        });
+        results.push(regApprovalOut(approval));
+      }
+    }
+  }
+
+  res.json({ ok: true, approvalsCreated: results.length, warnings });
+}));
+
 /* ── confirm-forward: the user checked the review email and forwarded it
  * himself to the kashrut body -- moves SENT_FOR_REVIEW to SENT_PENDING
  * with an editable sentAt (defaults to now). Added 3.11.2026 alongside

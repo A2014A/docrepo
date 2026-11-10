@@ -44,6 +44,7 @@ const RM_STATE = {
   yearRoundBodies: [], passoverBodies: [],
   track: 'YEAR_ROUND', loaded: false,
   lastFilteredIds: [], // R10: the export button exports exactly this set
+  bulkSelected: new Set(), // R12: checked row ids for bulk send
 };
 
 function rmEscapeHtml(s) {
@@ -145,6 +146,7 @@ function rmBuildPageShell() {
         <input type="number" id="rmStaleDays" value="14" min="1" onchange="rmApplyFilters()"/> ימים</label>
     </div>
     <div class="rm-legend" id="rmLegend"></div>
+    <div id="rmBulkToolbar"></div>
     <div class="rm-list" id="rmList"></div>
   `;
 }
@@ -734,6 +736,10 @@ async function rmOriginCellSave(el) {
 
 function rmRenderList(rows) {
   const el = document.getElementById('rmList');
+  // bulk selection never retains ids that are no longer visible after a filter change
+  const visibleIds = new Set(rows.map(({ item }) => item.id));
+  RM_STATE.bulkSelected = new Set([...RM_STATE.bulkSelected].filter(id => visibleIds.has(id)));
+  rmRenderBulkToolbar(rows.map(({ item }) => item.id));
   if (!rows.length) {
     el.innerHTML = '<div class="rm-empty">לא נמצאו חומרי גלם מתאימים</div>';
     return;
@@ -751,6 +757,7 @@ function rmRenderList(rows) {
     }).join('');
     return `
       <div class="rm-row" onclick="rmOpenCard(${item.id})" style="cursor:pointer">
+        ${rmIsReadOnly() ? '' : `<input type="checkbox" style="margin-left:4px" ${RM_STATE.bulkSelected.has(item.id) ? 'checked' : ''} onclick="event.stopPropagation();rmToggleBulkSelect(${item.id},this.checked)"/>`}
         <div class="rm-row-main">
           <div class="rm-row-name">${needsReview ? '<span class="rm-needs-review">לבדוק</span>' : ''}${rmEscapeHtml(item.name)}</div>
           <div class="rm-row-sub">${rmEscapeHtml(item.supplier || '— ספק לא ידוע —')}${item.manufacturer ? ' · ' + rmEscapeHtml(item.manufacturer) : ''} · ${skuText}</div>
@@ -759,6 +766,36 @@ function rmRenderList(rows) {
         <div class="rm-dots-grid" style="grid-template-columns:${rmGridTemplate()}">${dots}</div>
       </div>`;
   }).join('');
+}
+
+// R12: "select all filtered" + the bulk-send entry point. Hidden entirely
+// in read-only mode, same gate as every other write affordance here.
+function rmRenderBulkToolbar(visibleIds) {
+  const el = document.getElementById('rmBulkToolbar');
+  if (!el) return;
+  if (rmIsReadOnly()) { el.innerHTML = ''; return; }
+  const allChecked = visibleIds.length > 0 && visibleIds.every(id => RM_STATE.bulkSelected.has(id));
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:.84rem">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" ${allChecked ? 'checked' : ''} onchange="rmToggleSelectAllFiltered(this.checked)"/> בחר הכל (מסוננים)
+      </label>
+      <span style="color:var(--ink2)">${RM_STATE.bulkSelected.size} נבחרו</span>
+      ${RM_STATE.bulkSelected.size ? `<button class="btn btn-accent" style="margin-right:auto;font-size:.8rem;padding:5px 12px" onclick="rmOpenBulkSendModal()">📨 שלח מסומנים לאישור</button>` : ''}
+    </div>`;
+}
+
+// Just refreshes the toolbar's count/button -- does not re-render the full
+// list (which would reset scroll position) for a single checkbox click.
+function rmToggleBulkSelect(id, checked) {
+  if (checked) RM_STATE.bulkSelected.add(id); else RM_STATE.bulkSelected.delete(id);
+  rmRenderBulkToolbar(RM_STATE.lastFilteredIds);
+}
+
+function rmToggleSelectAllFiltered(checked) {
+  if (checked) RM_STATE.lastFilteredIds.forEach(id => RM_STATE.bulkSelected.add(id));
+  else RM_STATE.lastFilteredIds.forEach(id => RM_STATE.bulkSelected.delete(id));
+  rmApplyFilters();
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -1409,6 +1446,192 @@ async function rmSendSubmit() {
   document.getElementById('rmSendModal').classList.remove('open');
   btn.disabled = false;
   await rmLoadCard();
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * R12: bulk send -- same modal shape as R5 (bodies multi-select, tracks,
+ * contact per body, message), but for the currently bulk-selected raw
+ * materials at once. Documents are automatic (each item's label + the
+ * relevant origin certificate, per the spec), not a per-item checklist.
+ * Same REVIEW_EMAIL rule: EMAIL always goes through SENT_FOR_REVIEW first.
+ * ══════════════════════════════════════════════════════════════════════ */
+let RM_BULK_SEND = { bodyIds: new Set(), tracks: new Set(['YEAR_ROUND']), contactByBody: {}, channel: 'EMAIL', contacts: [] };
+let RM_BULK_SEND_MESSAGE_DIRTY = false;
+
+function rmBulkSendInjectModal() {
+  if (document.getElementById('rmBulkSendModal')) return;
+  const div = document.createElement('div');
+  div.className = 'modal-bg';
+  div.id = 'rmBulkSendModal';
+  div.innerHTML = `
+    <div class="modal" style="max-width:600px">
+      <div class="modal-header">
+        <div class="modal-title">📨 שליחה מרוכזת לאישור</div>
+        <button class="modal-close" onclick="document.getElementById('rmBulkSendModal').classList.remove('open')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="rmBulkSendBody" style="max-height:70vh;overflow-y:auto"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('rmBulkSendModal').classList.remove('open')">ביטול</button>
+        <button class="btn btn-accent" id="rmBulkSendSubmitBtn" onclick="rmBulkSendSubmit()">שלח</button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+async function rmOpenBulkSendModal() {
+  if (!RM_STATE.bulkSelected.size) { showToast('לא נבחרו חומרי גלם'); return; }
+  rmBulkSendInjectModal();
+  RM_BULK_SEND = { bodyIds: new Set(), tracks: new Set(['YEAR_ROUND']), contactByBody: {}, channel: 'EMAIL', contacts: [] };
+  RM_BULK_SEND_MESSAGE_DIRTY = false;
+  try { RM_BULK_SEND.contacts = await apiFetch('/api/contacts'); } catch (e) { RM_BULK_SEND.contacts = []; }
+  document.getElementById('rmBulkSendModal').classList.add('open');
+  rmBulkSendRender();
+}
+
+function rmBulkSendSelectedMaterials() {
+  return RM_STATE.items.filter(it => RM_STATE.bulkSelected.has(it.id));
+}
+
+function rmBulkSendAutoPickContact(bodyId) {
+  const body = RM_STATE.bodyById.get(bodyId);
+  const channelField = RM_BULK_SEND.channel === 'EMAIL' ? 'email' : 'phone';
+  let contact = null;
+  if (body && body.defaultContactId) contact = RM_BULK_SEND.contacts.find(c => c.id === body.defaultContactId);
+  if (!contact) contact = RM_BULK_SEND.contacts.find(c => c.kashrutBodyId === bodyId && c[channelField]);
+  if (contact) RM_BULK_SEND.contactByBody[bodyId] = contact.id;
+}
+
+function rmBulkSendMessageTemplate() {
+  const materials = rmBulkSendSelectedMaterials();
+  const tracks = [...RM_BULK_SEND.tracks];
+  const tracksText = tracks.length === 2 ? 'לימות השנה ולפסח' : RM_TRACK_LABEL[tracks[0]] || '';
+  const tableRows = materials.map(m => `- ${m.name}${m.manufacturer ? ' (' + m.manufacturer + ')' : ''}`).join('\n');
+  return `שלום,\n\nמצורפים מסמכים עבור ${materials.length} חומרי גלם, בנושא ${tracksText}:\n\n${tableRows}\n\nבברכה,\nאחים כהן`;
+}
+
+function rmBulkSendToggleBody(bodyId, checked) {
+  if (checked) { RM_BULK_SEND.bodyIds.add(bodyId); rmBulkSendAutoPickContact(bodyId); }
+  else RM_BULK_SEND.bodyIds.delete(bodyId);
+  rmBulkSendRender();
+}
+function rmBulkSendToggleTrack(track, checked) {
+  if (checked) RM_BULK_SEND.tracks.add(track); else RM_BULK_SEND.tracks.delete(track);
+  if (!RM_BULK_SEND.tracks.size) RM_BULK_SEND.tracks.add(track);
+  rmBulkSendRender();
+}
+function rmBulkSendSetChannel(channel) {
+  RM_BULK_SEND.channel = channel;
+  rmBulkSendRender();
+}
+function rmBulkSendPickContact(bodyId, contactId) {
+  RM_BULK_SEND.contactByBody[bodyId] = contactId ? parseInt(contactId) : null;
+}
+
+function rmBulkSendSummaryText() {
+  const materials = rmBulkSendSelectedMaterials();
+  const bodies = RM_STATE.allBodies.filter(b => RM_BULK_SEND.bodyIds.has(b.id));
+  const tracks = [...RM_BULK_SEND.tracks];
+  const tracksText = tracks.length === 2 ? 'לימות השנה ולפסח' : (RM_TRACK_LABEL[tracks[0]] || '');
+  const total = materials.length * bodies.length * tracks.length;
+  return `${materials.length} חומרי גלם × ${bodies.length} גופים × ${tracksText} = ${total} בקשות`;
+}
+
+function rmBulkSendRender() {
+  const channelField = RM_BULK_SEND.channel === 'EMAIL' ? 'email' : 'phone';
+  const bodies = RM_STATE.allBodies.filter(b => b.active).sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name));
+  const materials = rmBulkSendSelectedMaterials();
+  const el = document.getElementById('rmBulkSendBody');
+  const existingMsgEl = document.getElementById('rmBulkSendMessage');
+  const messageValue = (RM_BULK_SEND_MESSAGE_DIRTY && existingMsgEl) ? existingMsgEl.value : rmBulkSendMessageTemplate();
+  el.innerHTML = `
+    <div class="form-group">
+      <label class="form-label">${materials.length} חומרי גלם נבחרו</label>
+      <div style="max-height:90px;overflow-y:auto;border:1px solid var(--border2);border-radius:8px;padding:6px;font-size:.8rem;color:var(--ink2)">
+        ${materials.map(m => rmEscapeHtml(m.name)).join('<br/>')}
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">מסלול</label>
+      <div style="display:flex;gap:10px">
+        <label style="font-size:.85rem"><input type="checkbox" ${RM_BULK_SEND.tracks.has('YEAR_ROUND') ? 'checked' : ''} onchange="rmBulkSendToggleTrack('YEAR_ROUND',this.checked)"/> ימות השנה</label>
+        <label style="font-size:.85rem"><input type="checkbox" ${RM_BULK_SEND.tracks.has('PASSOVER') ? 'checked' : ''} onchange="rmBulkSendToggleTrack('PASSOVER',this.checked)"/> פסח</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">ערוץ</label>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn ${RM_BULK_SEND.channel === 'EMAIL' ? 'btn-accent' : 'btn-outline'}" style="flex:1" onclick="rmBulkSendSetChannel('EMAIL')">✉ מייל</button>
+        <button type="button" class="btn ${RM_BULK_SEND.channel === 'WHATSAPP' ? 'btn-accent' : 'btn-outline'}" style="flex:1" onclick="rmBulkSendSetChannel('WHATSAPP')">💬 וואטסאפ (רישום בלבד)</button>
+      </div>
+      ${RM_BULK_SEND.channel === 'EMAIL' ? `<p style="font-size:.74rem;color:var(--ink3);margin-top:4px">המייל יישלח אליך לבדיקה לכל גוף, לא ישירות לגוף הכשרות. תוכל לאשר העברה בפועל אחרי ששלחת אותו.</p>` : `<p style="font-size:.74rem;color:var(--ink3);margin-top:4px">בשליחה מרוכזת, וואטסאפ רק רושם את הסטטוס -- אין שיתוף קבצים אוטומטי לכל הפריטים.</p>`}
+    </div>
+    <div class="form-group">
+      <label class="form-label">גופי כשרות ואנשי קשר</label>
+      <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border2);border-radius:8px;padding:6px">
+        ${bodies.map(b => {
+          const checked = RM_BULK_SEND.bodyIds.has(b.id);
+          const contactOptions = RM_BULK_SEND.contacts.filter(c => c.kashrutBodyId === b.id && c[channelField]);
+          return `
+            <div style="padding:5px 4px;${checked ? '' : 'opacity:.6'}">
+              <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;cursor:pointer">
+                <input type="checkbox" ${checked ? 'checked' : ''} onchange="rmBulkSendToggleBody(${b.id},this.checked)"/>
+                ${rmEscapeHtml(b.shortName || b.name)}
+              </label>
+              ${checked ? `
+                <div style="display:flex;gap:6px;margin:4px 0 0 22px">
+                  <select style="flex:1;font-size:.78rem" onchange="rmBulkSendPickContact(${b.id}, this.value)">
+                    <option value="">— בחר איש קשר —</option>
+                    ${contactOptions.map(c => `<option value="${c.id}" ${RM_BULK_SEND.contactByBody[b.id] === c.id ? 'selected' : ''}>${rmEscapeHtml(c.name)} — ${rmEscapeHtml(c[channelField])}</option>`).join('')}
+                  </select>
+                </div>` : ''}
+            </div>`;
+        }).join('')}
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">הודעה</label>
+      <textarea class="form-input" id="rmBulkSendMessage" rows="5" style="resize:vertical" oninput="RM_BULK_SEND_MESSAGE_DIRTY=true">${rmEscapeHtml(messageValue)}</textarea>
+    </div>
+    <div style="background:var(--bg2);border-radius:8px;padding:10px;font-weight:600;text-align:center">${rmEscapeHtml(rmBulkSendSummaryText())}</div>`;
+}
+
+async function rmBulkSendSubmit() {
+  const materials = rmBulkSendSelectedMaterials();
+  if (!RM_BULK_SEND.bodyIds.size) { showToast('נא לבחור גוף כשרות אחד לפחות'); return; }
+  const message = document.getElementById('rmBulkSendMessage').value;
+  const tracks = [...RM_BULK_SEND.tracks];
+  const bodyIds = [...RM_BULK_SEND.bodyIds];
+
+  if (RM_BULK_SEND.channel === 'EMAIL') {
+    for (const bodyId of bodyIds) {
+      if (!RM_BULK_SEND.contactByBody[bodyId]) { showToast('נא לבחור איש קשר עם כתובת מייל לכל גוף שנבחר'); return; }
+    }
+  }
+  // required confirm click before sending, per spec
+  if (!confirm(rmBulkSendSummaryText() + '\n\nלשלוח?')) return;
+
+  const btn = document.getElementById('rmBulkSendSubmitBtn');
+  btn.disabled = true;
+  try {
+    const result = await apiFetch('/api/raw-material-registry/bulk-send', {
+      method: 'POST',
+      body: JSON.stringify({
+        rawMaterialIds: materials.map(m => m.id), kashrutBodyIds: bodyIds, tracks,
+        contactIds: RM_BULK_SEND.contactByBody, message,
+        via: RM_BULK_SEND.channel, recordOnly: RM_BULK_SEND.channel === 'WHATSAPP',
+      }),
+    });
+    if (result.warnings && result.warnings.length) result.warnings.forEach(w => showToast(w));
+    showToast(RM_BULK_SEND.channel === 'EMAIL'
+      ? `${result.approvalsCreated} בקשות נרשמו. המיילים נשלחו אליך לבדיקה -- אשר העברה בכל כרטיס עם "✔ הועבר לגוף"`
+      : `${result.approvalsCreated} בקשות נרשמו`);
+    document.getElementById('rmBulkSendModal').classList.remove('open');
+    RM_STATE.bulkSelected = new Set();
+    await rmLoad();
+  } catch (e) { showToast(e.message); }
+  btn.disabled = false;
 }
 
 /* ══════════════════════════════════════════════════════════════════════

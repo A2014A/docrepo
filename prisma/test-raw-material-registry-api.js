@@ -392,6 +392,37 @@ async function snapshot() {
     await s3.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: importFileDoc.fileUrl })).catch((e) => console.log('  WARN could not delete R2 object', importFileDoc.fileUrl, e.message));
   }
 
+  // R12: bulk send -- 2 raw materials x 2 bodies x 2 tracks = 8 approval
+  // rows. recordOnly=true even for EMAIL (same convention as the existing
+  // single-send test above) -- never calls nodemailer, never sends a real
+  // email, but still exercises the full review-first status/event logic.
+  const bulkRm1 = await prisma.rawMaterial.create({ data: { name: 'TEST-R12-bulk-1', supplier: 'TEST-SUP', manufacturer: 'TEST-MFR-1' } });
+  const bulkRm2 = await prisma.rawMaterial.create({ data: { name: 'TEST-R12-bulk-2', supplier: 'TEST-SUP', manufacturer: 'TEST-MFR-2' } });
+  const bulkSend = await api('POST', '/api/raw-material-registry/bulk-send', {
+    rawMaterialIds: [bulkRm1.id, bulkRm2.id], kashrutBodyIds: [bodyLandau.id, bodySecond.id],
+    tracks: ['YEAR_ROUND', 'PASSOVER'], via: 'EMAIL', recordOnly: true, message: 'TEST-בדיקה מרוכזת',
+  });
+  check('R12: bulk-send returns 200 with approvalsCreated=8 (2 materials x 2 bodies x 2 tracks)', bulkSend.status === 200 && bulkSend.body.approvalsCreated === 8, bulkSend.body);
+
+  const bulkApprovals = await prisma.rawMaterialApproval.findMany({ where: { rawMaterialId: { in: [bulkRm1.id, bulkRm2.id] } } });
+  check('R12: exactly 8 RawMaterialApproval rows created', bulkApprovals.length === 8);
+  check('R12: all 8 are SENT_FOR_REVIEW with sentAt unset (review-first rule, never SENT_PENDING directly)', bulkApprovals.every(a => a.status === 'SENT_FOR_REVIEW' && a.sentAt === null));
+  check('R12: every (rawMaterial, body, track) combination is covered exactly once', new Set(bulkApprovals.map(a => `${a.rawMaterialId}|${a.kashrutBodyId}|${a.track}`)).size === 8);
+
+  const bulkEvents = await prisma.rawMaterialApprovalEvent.findMany({ where: { approvalId: { in: bulkApprovals.map(a => a.id) } } });
+  check('R12: a SENT event was written for each of the 8 approvals', bulkEvents.length === 8 && bulkEvents.every(e => e.type === 'SENT' && e.payload.bulk === true));
+
+  // missing kashrutBodyIds / rawMaterialIds are rejected
+  const bulkMissingBodies = await api('POST', '/api/raw-material-registry/bulk-send', { rawMaterialIds: [bulkRm1.id], via: 'EMAIL', recordOnly: true });
+  check('R12: bulk-send without kashrutBodyIds is rejected (400)', bulkMissingBodies.status === 400);
+  const bulkMissingMaterials = await api('POST', '/api/raw-material-registry/bulk-send', { kashrutBodyIds: [bodyLandau.id], via: 'EMAIL', recordOnly: true });
+  check('R12: bulk-send without rawMaterialIds is rejected (400)', bulkMissingMaterials.status === 400);
+
+  // R12 cleanup
+  await prisma.rawMaterialApprovalEvent.deleteMany({ where: { approvalId: { in: bulkApprovals.map(a => a.id) } } });
+  await prisma.rawMaterialApproval.deleteMany({ where: { rawMaterialId: { in: [bulkRm1.id, bulkRm2.id] } } });
+  await prisma.rawMaterial.deleteMany({ where: { id: { in: [bulkRm1.id, bulkRm2.id] } } });
+
   // ── cleanup ──
   // capture R2 keys before deleting the Document rows, so the objects
   // themselves can be removed too, not just the DB rows

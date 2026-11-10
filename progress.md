@@ -828,3 +828,53 @@ Regression: both fixes covered by 2 new checks in
 `prisma/test-raw-material-registry-api.js` (a NOT_SENT column is blank
 with no fill; every filled cell's color comes from the new palette, never
 the old solid dot colors). **80/80 passing.**
+
+## R12 — Bulk send (done)
+
+- **Row checkboxes** on the list (hidden in read-only mode, same gate as
+  everything else here), a "בחר הכל (מסוננים)" checkbox that selects every
+  currently-*filtered* row (not the whole dataset), a live selected-count,
+  and "📨 שלח מסומנים לאישור" once at least one row is checked. Checking a
+  single row only re-renders the small toolbar, not the whole list, so
+  the scroll position doesn't jump.
+- **Modal**: same shape as R5 (track checkboxes, EMAIL/WhatsApp channel,
+  body multi-select with a contact picker per body, editable message),
+  plus a read-only list of the selected materials' names and a live
+  summary line ("N חומרי גלם × M גופים × מסלול = N×M×tracks בקשות").
+  Documents are **not** a per-item checklist here -- per the spec they're
+  automatic: each selected material's label + its relevant origin
+  certificate(s) for the chosen track(s).
+- **New `POST /api/raw-material-registry/bulk-send`**: one email per
+  body, aggregating every selected raw material into one table (name /
+  manufacturer / origin kashrut) with every item's label+cert attached.
+  If a body's combined attachments exceed ~20MB, they're split across
+  several emails for that body instead of zipped (same aggregated table
+  repeated in each, a subset of attachments, "(חלק X/Y)" in the subject)
+  -- no new dependency needed for that, and the response's `warnings`
+  array surfaces it as a toast. Same REVIEW_EMAIL rule as R5's
+  single-item send: EMAIL always goes to `REVIEW_EMAIL` first (status
+  `SENT_FOR_REVIEW`, `sentAt` unset), never directly to the body -- the
+  **existing, unchanged** `POST /api/approvals/:id/confirm-forward`
+  ("✔ הועבר לגוף") is what moves it to `SENT_PENDING`, since it already
+  works per-approval-id regardless of whether the row came from a single
+  or bulk send. An approval row + a SENT event is written for every
+  (raw material × body × track) combination.
+- **Before sending**: the live summary line doubles as the required
+  confirm step -- the "שלח" button's `confirm()` dialog repeats that
+  exact text ("לשלוח?") before the request fires.
+- Bulk WhatsApp is simplified to recording-only (no per-item file-share
+  dance across potentially many materials' many documents) -- WhatsApp
+  already always required `recordOnly=true` in the single-send endpoint
+  too, so this doesn't reduce anything that was previously real.
+
+Regression: `prisma/test-raw-material-registry-api.js` extended with 7
+checks (2 materials x 2 bodies x 2 tracks = 8 approvals, all
+SENT_FOR_REVIEW with sentAt unset, one SENT event each with `bulk: true`,
+every combination covered exactly once, missing-ids rejected). Uses
+`recordOnly: true` even for the EMAIL channel -- same convention as the
+existing single-send test, never calls nodemailer. **87/87 passing**,
+clean TEST- cleanup.
+
+### Next
+R7 (add-material flow) → R8 (SKU tab) → R9 (contacts/bodies settings),
+stopping after each with a browser-checkable summary.
