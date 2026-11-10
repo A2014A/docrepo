@@ -97,6 +97,20 @@ function rmInjectStyles() {
 .rm-dot{width:14px;height:14px;border-radius:50%;display:block;cursor:default;}
 .rm-origin-badge{position:absolute;bottom:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:#fff;border:1px solid var(--border2);color:var(--ink2);font-size:7px;font-weight:800;line-height:9px;text-align:center;cursor:default;}
 .rm-empty{text-align:center;padding:3rem;color:var(--ink3);}
+.rm-import-modal{width:min(900px,100%);max-height:85vh;}
+.rm-import-step{margin-bottom:1rem;}
+.rm-import-map-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.rm-import-map-row label{width:170px;flex-shrink:0;font-size:.85rem;color:var(--ink2);}
+.rm-import-map-row select{flex:1;padding:6px;border-radius:6px;border:1px solid var(--border2);}
+.rm-import-table{width:100%;border-collapse:collapse;font-size:.78rem;}
+.rm-import-table th,.rm-import-table td{padding:5px 7px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap;}
+.rm-import-table th{background:var(--bg2);position:sticky;top:0;}
+.rm-import-table-wrap{max-height:40vh;overflow:auto;border:1px solid var(--border);border-radius:8px;}
+.rm-import-badge{font-size:.68rem;padding:2px 8px;border-radius:99px;font-weight:600;white-space:nowrap;}
+.rm-import-badge.NEW{background:#dcfce7;color:#166534;}
+.rm-import-badge.EXISTING{background:#fef9c3;color:#854d0e;}
+.rm-import-badge.ERROR{background:#fee2e2;color:#991b1b;}
+.rm-import-counts{display:flex;gap:14px;margin-bottom:10px;font-size:.85rem;}
 `;
   document.head.appendChild(style);
 }
@@ -114,6 +128,7 @@ function rmBuildPageShell() {
         <button class="rm-track-btn" id="rmTrackPassover" onclick="rmSetTrack('PASSOVER')">פסח</button>
       </div>
       <button class="btn btn-outline" onclick="rmExportExcel()">📥 ייצוא לאקסל</button>
+      ${rmIsReadOnly() ? '' : `<button class="btn btn-outline" onclick="rmOpenImport()">📤 ייבוא מאקסל</button>`}
     </div>
     <div class="rm-summary" id="rmSummary"></div>
     <div class="rm-color-key" id="rmColorKey"></div>
@@ -125,6 +140,7 @@ function rmBuildPageShell() {
       <label><input type="checkbox" id="rmNeedsReviewFilter" onchange="rmApplyFilters()"/> ⚠ לבדוק בלבד</label>
       <label><input type="checkbox" id="rmNoOriginCertFilter" onchange="rmApplyFilters()"/> ללא תעודת מקור</label>
       <label><input type="checkbox" id="rmOriginPassoverFilter" onchange="rmApplyFilters()"/> כשר לפסח במקור</label>
+      <label><input type="checkbox" id="rmLastImportFilter" onchange="rmApplyFilters()"/> 📥 מייבוא אחרון</label>
       <label><input type="checkbox" id="rmStaleToggle" onchange="rmApplyFilters()"/> ⏳ ממתין מעל
         <input type="number" id="rmStaleDays" value="14" min="1" onchange="rmApplyFilters()"/> ימים</label>
     </div>
@@ -316,12 +332,17 @@ function rmApplyFilters() {
   const originPassoverOnly = document.getElementById('rmOriginPassoverFilter').checked;
   const staleOn = document.getElementById('rmStaleToggle').checked;
   const staleDays = parseInt(document.getElementById('rmStaleDays').value) || 14;
+  const lastImportOnly = document.getElementById('rmLastImportFilter').checked;
 
   const rows = RM_STATE.items.map(item => ({ item, statuses: rmStatusByBody(item, track) }));
+  // R11: "the newest import" is whichever importId is highest among loaded
+  // items -- works after a page reload too, since importId persists on the row.
+  const lastImportId = RM_STATE.items.reduce((max, it) => (it.importId != null && it.importId > max ? it.importId : max), -1);
 
   const filtered = rows.filter(({ item, statuses }) => {
     const needsReview = item.approvals.length === 0;
     if (needsReviewOnly && !needsReview) return false;
+    if (lastImportOnly && (lastImportId < 0 || item.importId !== lastImportId)) return false;
     if (noOriginCertOnly && item.originHasCert) return false;
     if (originPassoverOnly && !['PASSOVER', 'PASSOVER_KITNIYOT'].includes(item.originPassoverStatus)) return false;
     if (supplier && item.supplier !== supplier) return false;
@@ -364,6 +385,178 @@ async function rmExportExcel() {
     a.href = url; a.download = `חומרי גלם - ${new Date().toISOString().slice(0, 10)}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
+  } catch (e) { showToast(e.message); }
+}
+
+/* ══ R11: Excel/CSV import wizard (upload -> column mapping -> preview -> commit) ══
+ * Not available for the assistant role or demo mode (button hidden via
+ * rmIsReadOnly() in the page shell; the backend also gates every import
+ * route with requireAuth, which rejects the assistant-code pseudo-auth). */
+const RM_IMPORT_FIELDS = [
+  { key: 'name', label: 'שם (חובה)' },
+  { key: 'supplier', label: 'ספק' },
+  { key: 'manufacturer', label: 'יצרן' },
+  { key: 'originKashrutText', label: 'כשרות מקור' },
+  { key: 'skuCodes', label: 'מק"טים מקושרים (מופרדים בפסיק)' },
+  { key: 'notes', label: 'הערות' },
+  { key: 'supplierItemCode', label: 'קוד פריט ספק' },
+];
+let RM_IMPORT_STATE = null; // { file, headers, rows, mapping, preview, selected: Set }
+
+function rmImportModalShell(bodyHtml) {
+  let bg = document.getElementById('rmImportModalBg');
+  if (!bg) {
+    bg = document.createElement('div');
+    bg.id = 'rmImportModalBg';
+    bg.className = 'modal-bg';
+    document.body.appendChild(bg);
+  }
+  bg.innerHTML = `
+    <div class="modal rm-import-modal">
+      <div class="modal-header">
+        <div class="modal-title">📤 ייבוא חומרי גלם מאקסל</div>
+        <button class="modal-close" onclick="rmCloseImport()">✕</button>
+      </div>
+      <div id="rmImportBody">${bodyHtml}</div>
+    </div>`;
+  return bg;
+}
+
+function rmOpenImport() {
+  RM_IMPORT_STATE = null;
+  const bg = rmImportModalShell(`
+    <div class="rm-import-step">
+      <p style="color:var(--ink2);font-size:.85rem;margin-bottom:10px">העלה קובץ .xlsx או .csv מרשימת רכש/מפעל. העמודות יכולות להיות בכל סדר -- בשלב הבא תוכל לשייך אותן לשדות.</p>
+      <input type="file" id="rmImportFileInput" accept=".xlsx,.csv"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="rmCloseImport()">ביטול</button>
+      <button class="btn btn-accent" onclick="rmImportUpload()">המשך</button>
+    </div>`);
+  bg.classList.add('open');
+}
+
+function rmCloseImport() {
+  const bg = document.getElementById('rmImportModalBg');
+  if (bg) bg.classList.remove('open');
+}
+
+async function rmImportUpload() {
+  const input = document.getElementById('rmImportFileInput');
+  if (!input.files.length) { showToast('בחר קובץ'); return; }
+  const file = input.files[0];
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch(API + '/api/raw-material-registry/import/parse', { method: 'POST', headers: authHeaders(), body: fd });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'שגיאה בקריאת הקובץ');
+    RM_IMPORT_STATE = { file, headers: body.headers, rows: body.rows, mapping: body.mapping };
+    rmImportRenderMappingStep();
+  } catch (e) { showToast(e.message); }
+}
+
+function rmImportRenderMappingStep() {
+  const { headers } = RM_IMPORT_STATE;
+  const optionsHtml = `<option value="">— ללא —</option>` + headers.map((h, i) => `<option value="${i}">${rmEscapeHtml(h || '(עמודה ' + (i + 1) + ')')}</option>`).join('');
+  const rowsHtml = RM_IMPORT_FIELDS.map(f => `
+    <div class="rm-import-map-row">
+      <label>${rmEscapeHtml(f.label)}</label>
+      <select id="rmImportMap_${f.key}">${optionsHtml}</select>
+    </div>`).join('');
+  document.getElementById('rmImportBody').innerHTML = `
+    <div class="rm-import-step">
+      <p style="color:var(--ink2);font-size:.85rem;margin-bottom:10px">${RM_IMPORT_STATE.rows.length} שורות בקובץ. שייך כל שדה לעמודה המתאימה (שויך אוטומטית לפי כותרות העמודות -- אפשר לשנות):</p>
+      ${rowsHtml}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="rmOpenImport()">→ חזרה</button>
+      <button class="btn btn-accent" onclick="rmImportPreview()">המשך לתצוגה מקדימה</button>
+    </div>`;
+  for (const f of RM_IMPORT_FIELDS) {
+    const sel = document.getElementById('rmImportMap_' + f.key);
+    if (RM_IMPORT_STATE.mapping[f.key] != null) sel.value = String(RM_IMPORT_STATE.mapping[f.key]);
+  }
+}
+
+async function rmImportPreview() {
+  const mapping = {};
+  for (const f of RM_IMPORT_FIELDS) {
+    const v = document.getElementById('rmImportMap_' + f.key).value;
+    if (v !== '') mapping[f.key] = parseInt(v);
+  }
+  if (mapping.name == null) { showToast('חובה לשייך את שדה השם'); return; }
+  RM_IMPORT_STATE.mapping = mapping;
+  try {
+    const result = await apiFetch('/api/raw-material-registry/import/preview', {
+      method: 'POST', body: JSON.stringify({ rows: RM_IMPORT_STATE.rows, mapping }),
+    });
+    RM_IMPORT_STATE.preview = result.rows;
+    // duplicates unticked by default, NEW rows ticked by default, ERROR rows never selectable
+    RM_IMPORT_STATE.selected = new Set(result.rows.filter(r => r.classification === 'NEW').map(r => r.rowIndex));
+    rmImportRenderPreviewStep(result.counts);
+  } catch (e) { showToast(e.message); }
+}
+
+function rmImportRenderPreviewStep(counts) {
+  const rows = RM_IMPORT_STATE.preview;
+  const tableRows = rows.map(r => {
+    const disabled = r.classification === 'ERROR';
+    const checked = RM_IMPORT_STATE.selected.has(r.rowIndex);
+    return `<tr>
+      <td><input type="checkbox" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} onchange="rmImportToggleRow(${r.rowIndex}, this.checked)"/></td>
+      <td><span class="rm-import-badge ${r.classification}">${r.classification === 'NEW' ? 'חדש' : r.classification === 'EXISTING' ? 'קיים' : 'שגיאה'}</span></td>
+      <td>${rmEscapeHtml(r.name)}</td>
+      <td>${rmEscapeHtml(r.supplier)}</td>
+      <td>${rmEscapeHtml(r.manufacturer)}</td>
+      <td>${rmEscapeHtml(r.originKashrutText)}</td>
+      <td>${rmEscapeHtml(r.skuCodes.join(', '))}</td>
+      <td>${rmEscapeHtml(r.supplierItemCode)}</td>
+      <td style="color:var(--ink3)">${rmEscapeHtml(r.reason)}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('rmImportBody').innerHTML = `
+    <div class="rm-import-step">
+      <div class="rm-import-counts">
+        <span>🆕 חדש: <b>${counts.NEW}</b></span>
+        <span>♻ קיים: <b>${counts.EXISTING}</b></span>
+        <span>⚠ שגיאה: <b>${counts.ERROR}</b></span>
+      </div>
+      <label style="display:block;margin-bottom:10px;font-size:.85rem"><input type="checkbox" id="rmImportFillEmpty"/> עדכן שדות ריקים בקיימים (רשומות קיימות לא נדרסות, רק שדות ריקים מתמלאים)</label>
+      <div class="rm-import-table-wrap">
+        <table class="rm-import-table">
+          <thead><tr><th></th><th>סטטוס</th><th>שם</th><th>ספק</th><th>יצרן</th><th>כשרות מקור</th><th>מק"טים</th><th>קוד ספק</th><th>הערה</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="rmImportRenderMappingStep()">→ חזרה למיפוי</button>
+      <button class="btn btn-accent" id="rmImportCommitBtn" onclick="rmImportCommit()">✔ ייבא ${RM_IMPORT_STATE.selected.size} רשומות</button>
+    </div>`;
+}
+
+function rmImportToggleRow(rowIndex, checked) {
+  if (checked) RM_IMPORT_STATE.selected.add(rowIndex); else RM_IMPORT_STATE.selected.delete(rowIndex);
+  const btn = document.getElementById('rmImportCommitBtn');
+  if (btn) btn.textContent = `✔ ייבא ${RM_IMPORT_STATE.selected.size} רשומות`;
+}
+
+async function rmImportCommit() {
+  const fillEmptyOnExisting = document.getElementById('rmImportFillEmpty').checked;
+  const fd = new FormData();
+  fd.append('file', RM_IMPORT_STATE.file);
+  fd.append('rows', JSON.stringify(RM_IMPORT_STATE.rows));
+  fd.append('mapping', JSON.stringify(RM_IMPORT_STATE.mapping));
+  fd.append('selectedIndexes', JSON.stringify([...RM_IMPORT_STATE.selected]));
+  fd.append('fillEmptyOnExisting', fillEmptyOnExisting ? '1' : '0');
+  try {
+    const res = await fetch(API + '/api/raw-material-registry/import/commit', { method: 'POST', headers: authHeaders(), body: fd });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'שגיאה בייבוא');
+    showToast(`יובאו ${body.rowsCreated} רשומות חדשות (${body.rowsSkipped} דולגו)`);
+    rmCloseImport();
+    await rmLoad();
   } catch (e) { showToast(e.message); }
 }
 

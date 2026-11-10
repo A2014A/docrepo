@@ -722,3 +722,70 @@ snapshot confirms clean TEST- cleanup.
 R11 (Excel import) → R12 (bulk send) → R7 (add-material flow) → R8 (SKU
 tab) → R9 (contacts/bodies settings), stopping after each with a
 browser-checkable summary.
+
+## R11 — Excel/CSV import (done)
+
+- **Schema (additive):** `RawMaterial.supplierItemCode String?` +
+  `RawMaterial.importId Int?` (-> `RawMaterialImport`); new
+  `RawMaterialImport { id, fileDocId -> Document, byUserId -> User, at,
+  rowsCreated, rowsSkipped }`. Backed up first:
+  `backups/2026-11-10T10-54-59-687Z`. Clean `prisma db push`, no
+  data-loss warning.
+- **Gating ("not available for the assistant role or in demo mode"):**
+  every import route uses `requireAuth` (plain JWT only), not
+  `requireAssistant` -- `requireAuth` never looks at the
+  `x-assistant-code` header at all, so the assistant pseudo-auth is
+  rejected with 401 by construction, not by a special-cased role check.
+  Demo mode is gated client-side the same way the rest of this screen
+  already does it (`rmIsReadOnly()` hides the "📤 ייבוא מאקסל" button
+  entirely).
+- **Three-step wizard**, all in one dynamically-built modal
+  (`.modal-bg`/`.modal` -- the same classes index.html's static modals
+  use, so no new overlay CSS was needed):
+  1. **Upload** (`POST .../import/parse`, .xlsx via `exceljs` xlsx.load
+     or .csv via `exceljs` csv.read on a buffer-backed stream) -- returns
+     headers + every row + a guessed column mapping.
+  2. **Column mapping**: a dropdown per field (name/supplier/manufacturer/
+     origin kashrut text/SKU codes/notes/supplier item code), pre-filled
+     from the guess. The guess keyword table is ordered supplier-item-code
+     before SKU-codes on purpose -- a header like "קוד פריט ספק" contains
+     the substring "מקט" that the generic SKU-codes keyword would
+     otherwise have greedily claimed first.
+  3. **Preview** (`POST .../import/preview`): every row classified
+     **חדש** / **קיים** (by `supplierItemCode`, else normalized
+     name+supplier) / **שגיאה** (missing name, or any unresolvable SKU
+     code in the comma-separated list -- one bad code fails the whole
+     row, not just that code). חדש rows ticked by default, קיים
+     unticked, שגיאה permanently disabled. An "עדכן שדות ריקים בקיימים"
+     checkbox controls whether ticking a קיים row fills *only* its empty
+     fields on the matched record -- existing values are never
+     overwritten either way.
+- **Commit** (`POST .../import/commit`, re-sends the same file): creates
+  `RawMaterial` rows for ticked חדש rows (+ `SkuRawMaterial` links for
+  any SKU codes found), applies empty-field fills for ticked קיים rows
+  when the checkbox was on, saves the file itself as a `Document`
+  (`docType: 'אחר'`, hidden) linked via a new `RawMaterialImport` row,
+  and returns a created/skipped summary. Classification is recomputed
+  from the same shared `classifyRegImportRows()` at commit time (not
+  trusted from the client), so a stale preview can't create something
+  that no longer qualifies.
+- **List screen**: new "📥 מייבוא אחרון" filter checkbox -- computed
+  purely from the loaded items' `importId` (whichever value is highest),
+  so it keeps working correctly after a page reload, with no extra
+  endpoint needed.
+- Tested with a TEST- prefixed in-memory CSV (4 rows: one new, one
+  duplicate-by-name+supplier, one missing name, one unknown SKU code) --
+  never written to disk, built and sent directly in the regression test.
+
+Regression: `prisma/test-raw-material-registry-api.js` extended with 18
+checks (auth gating, parse/mapping-guess, all three classifications,
+commit counts, SKU link creation, fill-empty-without-overwrite, the
+import batch + saved Document, list-endpoint exposure for the new
+filter). **78/78 passing**, table-count snapshot (now including
+`rawMaterialImport`) confirms clean TEST- cleanup, R2 test object
+deleted.
+
+### Next
+R12 (bulk send) → R7 (add-material flow) → R8 (SKU tab) → R9
+(contacts/bodies settings), stopping after each with a browser-checkable
+summary.

@@ -150,6 +150,7 @@ model User {
   updatedRawMaterialApprovals RawMaterialApproval[]
   rawMaterialApprovalEvents   RawMaterialApprovalEvent[]
   decidedLinkSuggestions      LinkSuggestion[] // added 5.11.2026 (link-suggestions L2, additive)
+  rawMaterialImports          RawMaterialImport[] // R11, added 10.11.2026
 }
 
 model Customer {
@@ -275,6 +276,7 @@ model Document {
 
   identification DocIdentification? // added 3.11.2026 (link-suggestions L1, additive)
   linkSuggestions LinkSuggestion[]  // added 5.11.2026 (link-suggestions L2, additive)
+  rawMaterialImportFor RawMaterialImport[] // R11, added 10.11.2026
 }
 
 model SkuLink {
@@ -395,9 +397,28 @@ model RawMaterial {
   originPassoverCertDoc    Document?            @relation("RawMaterialOriginPassoverCertDoc", fields: [originPassoverCertDocId], references: [id])
   originPassoverValidUntil DateTime?
 
+  // R11 (docrepo-phase4-v2-tracks.md, added 10.11.2026, additive): Excel/CSV
+  // import of raw-material lists from purchasing/the factory.
+  supplierItemCode String?
+  importId         Int?
+  import           RawMaterialImport? @relation(fields: [importId], references: [id])
+
   documents RawMaterialDocument[]
   approvals RawMaterialApproval[]
   skus      SkuRawMaterial[]
+}
+
+model RawMaterialImport {
+  id          Int       @id @default(autoincrement())
+  fileDocId   Int?
+  fileDoc     Document? @relation(fields: [fileDocId], references: [id])
+  byUserId    Int?
+  byUser      User?     @relation(fields: [byUserId], references: [id])
+  at          DateTime  @default(now())
+  rowsCreated Int       @default(0)
+  rowsSkipped Int       @default(0)
+
+  rawMaterials RawMaterial[]
 }
 
 model RawMaterialDocument {

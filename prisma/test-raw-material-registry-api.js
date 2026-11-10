@@ -35,7 +35,7 @@ async function api(method, path, body, isMultipart) {
   return { status: res.status, body: json };
 }
 
-const SNAPSHOT_TABLES = ['document', 'rawMaterial', 'rawMaterialDocument', 'rawMaterialApproval', 'rawMaterialApprovalEvent', 'skuRawMaterial', 'user'];
+const SNAPSHOT_TABLES = ['document', 'rawMaterial', 'rawMaterialDocument', 'rawMaterialApproval', 'rawMaterialApprovalEvent', 'skuRawMaterial', 'rawMaterialImport', 'user'];
 async function snapshot() {
   const out = {};
   for (const t of SNAPSHOT_TABLES) out[t] = await prisma[t].count();
@@ -288,6 +288,93 @@ async function snapshot() {
     if (cell.value && cell.fill && cell.fill.fgColor) { foundColoredStatusCell = true; break; }
   }
   check('R10: at least one status cell in the test row has both a label and a fill color', foundColoredStatusCell);
+
+  // R11: Excel/CSV import -- requireAuth gating, parse/preview/commit,
+  // duplicate detection (supplierItemCode + normalized name+supplier),
+  // unknown-SKU error rows, fill-empty-on-existing, importId filtering.
+  const r11Name1 = 'TEST-R11-new-' + Date.now();
+  const r11Name2 = 'TEST-R11-dup-' + Date.now(); // will collide by name+supplier with an existing record created below
+  const r11Supplier = 'TEST-R11-SUP';
+  const csvText = `שם,ספק,יצרן,כשרות מקור,מק"ט,הערות,קוד ספק\n`
+    + `${r11Name1},${r11Supplier},TEST-MFR,TEST-OU,${anySku.code},TEST note,ITEMCODE-1\n`
+    + `${r11Name2},${r11Supplier},TEST-MFR,TEST-OU,,TEST note 2,\n`
+    + `,TEST-NO-NAME-SUP,,,,,\n` // ERROR: missing name
+    + `TEST-R11-badsku,TEST-SUP,,,TEST-NONEXISTENT-SKU-CODE-XYZ,,\n`; // ERROR: unknown SKU
+  const csvBuf = Buffer.from(csvText, 'utf8');
+
+  // pre-existing record for the name+supplier duplicate match
+  const preexisting = await prisma.rawMaterial.create({ data: { name: r11Name2, supplier: r11Supplier, manufacturer: null, notes: null } });
+
+  // gating: requireAuth rejects the assistant-code-only pseudo-auth (no Bearer)
+  const setting2 = await prisma.syncState.findUnique({ where: { key: 'assistant_code' } });
+  const assistantOnlyHeader = { 'x-assistant-code': setting2 ? setting2.value : '5678' };
+  const fdGate = new FormData();
+  fdGate.append('file', new Blob([csvBuf]), 'test.csv');
+  const gateRes = await fetch(`${BASE}/api/raw-material-registry/import/parse`, { method: 'POST', headers: assistantOnlyHeader, body: fdGate });
+  check('R11: import/parse rejects assistant-code-only auth (401, not available for assistant role)', gateRes.status === 401);
+
+  const fdParse = new FormData();
+  fdParse.append('file', new Blob([csvBuf]), 'test.csv');
+  const parseRes = await fetch(`${BASE}/api/raw-material-registry/import/parse`, { method: 'POST', headers: AUTH_HEADER, body: fdParse });
+  const parseBody = await parseRes.json();
+  check('R11: import/parse returns 200 with headers+rows+guessed mapping', parseRes.status === 200 && parseBody.rows.length === 4);
+  check('R11: mapping auto-guessed name/supplier/skuCodes/supplierItemCode columns', parseBody.mapping.name != null && parseBody.mapping.supplier != null && parseBody.mapping.skuCodes != null && parseBody.mapping.supplierItemCode != null);
+
+  const previewRes = await api('POST', '/api/raw-material-registry/import/preview', { rows: parseBody.rows, mapping: parseBody.mapping });
+  check('R11: preview returns 200', previewRes.status === 200);
+  const previewRows = previewRes.body.rows;
+  const rowNew = previewRows.find(r => r.name === r11Name1);
+  const rowDup = previewRows.find(r => r.name === r11Name2);
+  const rowNoName = previewRows.find(r => !r.name);
+  const rowBadSku = previewRows.find(r => r.name === 'TEST-R11-badsku');
+  check('R11: row with a known SKU code and no existing match classified NEW', rowNew && rowNew.classification === 'NEW');
+  check('R11: row matching an existing name+supplier classified EXISTING', rowDup && rowDup.classification === 'EXISTING' && rowDup.matchedExistingId === preexisting.id);
+  check('R11: row with missing name classified ERROR', rowNoName && rowNoName.classification === 'ERROR');
+  check('R11: row with an unknown SKU code classified ERROR', rowBadSku && rowBadSku.classification === 'ERROR');
+  check('R11: counts match NEW=1, EXISTING=1, ERROR=2', previewRes.body.counts.NEW === 1 && previewRes.body.counts.EXISTING === 1 && previewRes.body.counts.ERROR === 2);
+
+  // commit: select the NEW row and the EXISTING (duplicate) row, with fillEmptyOnExisting -- ERROR rows are never selectable
+  const fdCommit = new FormData();
+  fdCommit.append('file', new Blob([csvBuf]), 'test.csv');
+  fdCommit.append('rows', JSON.stringify(parseBody.rows));
+  fdCommit.append('mapping', JSON.stringify(parseBody.mapping));
+  fdCommit.append('selectedIndexes', JSON.stringify([rowNew.rowIndex, rowDup.rowIndex]));
+  fdCommit.append('fillEmptyOnExisting', '1');
+  const commitRes = await fetch(`${BASE}/api/raw-material-registry/import/commit`, { method: 'POST', headers: AUTH_HEADER, body: fdCommit });
+  const commitBody = await commitRes.json();
+  check('R11: commit returns 200 with rowsCreated=1 (the duplicate is never created, only filled)', commitRes.status === 200 && commitBody.rowsCreated === 1);
+  check('R11: rowsSkipped counts the duplicate + 2 errors', commitBody.rowsSkipped === 3);
+
+  const createdR11 = await prisma.rawMaterial.findFirst({ where: { name: r11Name1 } });
+  check('R11: the NEW row was actually created with supplierItemCode + importId set', createdR11 && createdR11.supplierItemCode === 'ITEMCODE-1' && createdR11.importId === commitBody.importId);
+  const skuLinkR11 = await prisma.skuRawMaterial.findFirst({ where: { rawMaterialId: createdR11.id, skuId: anySku.id } });
+  check('R11: the NEW row got linked to the SKU found in its skuCodes column', !!skuLinkR11);
+
+  const preexistingAfter = await prisma.rawMaterial.findUnique({ where: { id: preexisting.id } });
+  check('R11: the EXISTING (duplicate) row was never overwritten by name/supplier (unchanged)', preexistingAfter.name === r11Name2 && preexistingAfter.supplier === r11Supplier);
+  check('R11: fillEmptyOnExisting filled the empty manufacturer/notes on the duplicate, without touching name/supplier', preexistingAfter.manufacturer === 'TEST-MFR' && preexistingAfter.notes === 'TEST note 2');
+
+  const importBatch = await prisma.rawMaterialImport.findUnique({ where: { id: commitBody.importId } });
+  check('R11: RawMaterialImport batch recorded rowsCreated/rowsSkipped and a linked fileDoc', importBatch && importBatch.rowsCreated === 1 && importBatch.rowsSkipped === 3 && importBatch.fileDocId != null);
+  const importFileDoc = await prisma.document.findUnique({ where: { id: importBatch.fileDocId } });
+  check('R11: the uploaded file was saved as a Document', !!importFileDoc);
+
+  const listRes = await api('GET', '/api/raw-material-registry');
+  const listCreatedR11 = listRes.body.find(r => r.id === createdR11.id);
+  check('R11: list endpoint exposes importId/supplierItemCode on the new record (for the מייבוא אחרון filter)', listCreatedR11 && listCreatedR11.importId === commitBody.importId && listCreatedR11.supplierItemCode === 'ITEMCODE-1');
+
+  // R11 cleanup (separate from the main record's cleanup below)
+  await prisma.skuRawMaterial.deleteMany({ where: { rawMaterialId: createdR11.id } });
+  await prisma.rawMaterial.delete({ where: { id: createdR11.id } });
+  await prisma.rawMaterial.update({ where: { id: preexisting.id }, data: { manufacturer: null, notes: null } }); // undo the fill before deleting, harmless either way since the row is deleted next
+  await prisma.rawMaterial.delete({ where: { id: preexisting.id } });
+  await prisma.document.delete({ where: { id: importBatch.fileDocId } });
+  await prisma.rawMaterialImport.delete({ where: { id: importBatch.id } });
+  {
+    const { S3Client, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+    const s3 = new S3Client({ region: 'auto', endpoint: process.env.R2_ENDPOINT, credentials: { accessKeyId: process.env.R2_ACCESS_KEY_ID, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY } });
+    await s3.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: importFileDoc.fileUrl })).catch((e) => console.log('  WARN could not delete R2 object', importFileDoc.fileUrl, e.message));
+  }
 
   // ── cleanup ──
   // capture R2 keys before deleting the Document rows, so the objects

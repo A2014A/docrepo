@@ -932,6 +932,7 @@ function regMaterialOut(rm, extra) {
     originHasCert: rm.originHasCert,
     originPassoverStatus: rm.originPassoverStatus, originPassoverText: rm.originPassoverText || '',
     originPassoverCertDocId: rm.originPassoverCertDocId, originPassoverValidUntil: rm.originPassoverValidUntil,
+    supplierItemCode: rm.supplierItemCode || '', importId: rm.importId,
     createdAt: rm.createdAt, updatedAt: rm.updatedAt,
     documents: documents.map(regDocOut),
     approvals: approvals.map(regApprovalOut),
@@ -1019,6 +1020,210 @@ app.delete('/api/raw-material-registry/:id', requireAuth, requireAdmin, ah(async
   ]);
   res.json({ ok: true });
   // note: same convention as DELETE /api/docs/:id -- R2 objects are not reaped here
+}));
+
+/* ── R11: Excel/CSV import of raw materials ──
+ * requireAuth (not requireAssistant) on every route here -- per spec "not
+ * available for the assistant role", and requireAuth's plain-JWT check
+ * naturally excludes the x-assistant-code pseudo-auth that requireAssistant
+ * also accepts. Demo mode is gated client-side only (rmIsReadOnly()), same
+ * as every other write affordance on this screen. */
+
+// Ordered so a more specific header ("קוד ספק"/"מק"ט ספק") is claimed before
+// the generic skuCodes keyword ("מק"ט") would otherwise greedily match it.
+const REG_IMPORT_FIELD_KEYWORDS = {
+  name: ['שם', 'תיאור', 'name', 'description', 'item name'],
+  supplier: ['ספק', 'supplier', 'vendor'],
+  manufacturer: ['יצרן', 'manufacturer', 'maker'],
+  originKashrutText: ['כשרות מקור', 'כשרות', 'הכשר', 'hechsher', 'kashrut', 'kosher'],
+  supplierItemCode: ['קוד ספק', 'מקט ספק', 'קוד פריט ספק', 'supplier item code', 'vendor code', 'vendor item'],
+  skuCodes: ['מקט', 'מקטים', 'sku', 'skus', 'item code', 'קוד פריט'],
+  notes: ['הערות', 'הערה', 'notes', 'note', 'remark'],
+};
+function regImportNormalizeHeader(s) {
+  return (s || '').toString().trim().toLowerCase().replace(/["'״׳]/g, '');
+}
+function guessRegImportColumnMapping(headers) {
+  const mapping = {};
+  const used = new Set();
+  const normHeaders = headers.map(regImportNormalizeHeader);
+  for (const [field, keywords] of Object.entries(REG_IMPORT_FIELD_KEYWORDS)) {
+    let best = null;
+    for (let i = 0; i < normHeaders.length; i++) {
+      if (!normHeaders[i] || used.has(i)) continue;
+      if (keywords.some(k => normHeaders[i].includes(regImportNormalizeHeader(k)))) { best = i; break; }
+    }
+    if (best != null) { mapping[field] = best; used.add(best); }
+  }
+  return mapping;
+}
+
+function regImportCellToString(v) {
+  if (v == null) return '';
+  if (typeof v === 'object') {
+    if (Array.isArray(v.richText)) return v.richText.map(rt => rt.text).join('');
+    if (v.text != null) return String(v.text);
+    if (v.result != null) return String(v.result); // formula cell
+  }
+  return String(v);
+}
+
+async function parseRegImportFile(buffer, ext) {
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  let ws;
+  if (ext === 'csv') {
+    const { Readable } = require('stream');
+    let text = buffer.toString('utf8');
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    ws = await wb.csv.read(Readable.from([text]));
+  } else {
+    await wb.xlsx.load(buffer);
+    ws = wb.worksheets[0];
+  }
+  const allRows = [];
+  ws.eachRow((row) => {
+    allRows.push(row.values.slice(1).map(v => regImportCellToString(v).trim()));
+  });
+  const width = allRows.reduce((m, r) => Math.max(m, r.length), 0);
+  for (const r of allRows) while (r.length < width) r.push('');
+  const headers = allRows[0] || [];
+  const rows = allRows.slice(1).filter(r => r.some(c => c !== ''));
+  return { headers, rows };
+}
+
+function regImportNormalizeText(s) { return (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' '); }
+
+// Shared by preview and commit so classification can never drift between
+// what the user reviewed and what actually gets written.
+async function classifyRegImportRows(rows, mapping) {
+  const get = (row, field) => (mapping[field] != null ? (row[mapping[field]] || '').toString().trim() : '');
+  const parsedRows = rows.map(row => ({
+    name: get(row, 'name'), supplier: get(row, 'supplier'), manufacturer: get(row, 'manufacturer'),
+    originKashrutText: get(row, 'originKashrutText'), notes: get(row, 'notes'),
+    supplierItemCode: get(row, 'supplierItemCode'),
+    skuCodes: get(row, 'skuCodes').split(',').map(c => c.trim()).filter(Boolean),
+  }));
+
+  const allCodes = new Set(parsedRows.flatMap(r => r.skuCodes));
+  const foundSkus = allCodes.size ? await prisma.sku.findMany({ where: { code: { in: [...allCodes] } }, select: { code: true } }) : [];
+  const foundCodeSet = new Set(foundSkus.map(s => s.code));
+
+  const supplierItemCodes = parsedRows.map(r => r.supplierItemCode).filter(Boolean);
+  const existingByItemCode = supplierItemCodes.length
+    ? await prisma.rawMaterial.findMany({ where: { supplierItemCode: { in: supplierItemCodes } } }) : [];
+  const existingByItemCodeMap = new Map(existingByItemCode.map(e => [e.supplierItemCode, e]));
+  const allExisting = await prisma.rawMaterial.findMany();
+  const existingByNameSupplier = new Map(
+    allExisting.map(e => [regImportNormalizeText(e.name) + '|' + regImportNormalizeText(e.supplier), e])
+  );
+
+  return parsedRows.map((r, i) => {
+    const unknownCodes = r.skuCodes.filter(c => !foundCodeSet.has(c));
+    let classification, matchedExistingId = null, reason = '';
+    if (!r.name) { classification = 'ERROR'; reason = 'שם חסר'; }
+    else if (unknownCodes.length) { classification = 'ERROR'; reason = 'מק"ט לא ידוע: ' + unknownCodes.join(', '); }
+    else {
+      const byCode = r.supplierItemCode ? existingByItemCodeMap.get(r.supplierItemCode) : null;
+      const byNameSupplier = existingByNameSupplier.get(regImportNormalizeText(r.name) + '|' + regImportNormalizeText(r.supplier));
+      const existing = byCode || byNameSupplier;
+      if (existing) {
+        classification = 'EXISTING'; matchedExistingId = existing.id;
+        reason = byCode ? 'התאמה לפי קוד ספק' : 'התאמה לפי שם וספק';
+      } else classification = 'NEW';
+    }
+    return { rowIndex: i, ...r, classification, matchedExistingId, reason };
+  });
+}
+
+app.post('/api/raw-material-registry/import/parse', requireAuth, upload.single('file'), ah(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  const ext = path.extname(req.file.originalname).replace('.', '').toLowerCase();
+  if (!['xlsx', 'csv'].includes(ext)) return res.status(400).json({ error: 'יש להעלות קובץ xlsx או csv' });
+  const { headers, rows } = await parseRegImportFile(req.file.buffer, ext);
+  if (!rows.length) return res.status(400).json({ error: 'הקובץ ריק' });
+  res.json({ headers, rows, mapping: guessRegImportColumnMapping(headers) });
+}));
+
+app.post('/api/raw-material-registry/import/preview', requireAuth, ah(async (req, res) => {
+  const { rows, mapping } = req.body || {};
+  if (!Array.isArray(rows) || !mapping) return res.status(400).json({ error: 'חסרים rows/mapping' });
+  const classified = await classifyRegImportRows(rows, mapping);
+  res.json({
+    rows: classified,
+    counts: {
+      NEW: classified.filter(r => r.classification === 'NEW').length,
+      EXISTING: classified.filter(r => r.classification === 'EXISTING').length,
+      ERROR: classified.filter(r => r.classification === 'ERROR').length,
+    },
+  });
+}));
+
+app.post('/api/raw-material-registry/import/commit', requireAuth, upload.single('file'), ah(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  let rows, mapping, selectedIndexes;
+  try {
+    rows = JSON.parse(req.body.rows);
+    mapping = JSON.parse(req.body.mapping);
+    selectedIndexes = new Set(JSON.parse(req.body.selectedIndexes).map(Number));
+  } catch (e) { return res.status(400).json({ error: 'נתונים לא תקינים' }); }
+  const fillEmptyOnExisting = req.body.fillEmptyOnExisting === '1' || req.body.fillEmptyOnExisting === 'true';
+
+  const classified = await classifyRegImportRows(rows, mapping);
+
+  const ext = path.extname(req.file.originalname).replace('.', '').toLowerCase();
+  const key = r2KeyFor(req.file.originalname);
+  await uploadBuffer(req.file.buffer, key, req.file.mimetype);
+  const fileDoc = await prisma.document.create({
+    data: {
+      title: req.file.originalname.replace(/\.[^.]+$/, ''),
+      docType: 'אחר', docExt: ext, sizeBytes: req.file.size,
+      fileUrl: key, hidden: true, uploadedById: req.user.id || null,
+    },
+  });
+  const importBatch = await prisma.rawMaterialImport.create({
+    data: { fileDocId: fileDoc.id, byUserId: req.user.id || null },
+  });
+
+  let rowsCreated = 0, rowsSkipped = 0;
+  for (const r of classified) {
+    if (!selectedIndexes.has(r.rowIndex)) { rowsSkipped++; continue; }
+    if (r.classification === 'ERROR') { rowsSkipped++; continue; }
+    if (r.classification === 'EXISTING') {
+      if (fillEmptyOnExisting) {
+        const existing = await prisma.rawMaterial.findUnique({ where: { id: r.matchedExistingId } });
+        if (existing) {
+          const fillUpdates = {};
+          if (!existing.supplier && r.supplier) fillUpdates.supplier = r.supplier;
+          if (!existing.manufacturer && r.manufacturer) fillUpdates.manufacturer = r.manufacturer;
+          if (!existing.originKashrutText && r.originKashrutText) fillUpdates.originKashrutText = r.originKashrutText;
+          if (!existing.notes && r.notes) fillUpdates.notes = r.notes;
+          if (!existing.supplierItemCode && r.supplierItemCode) fillUpdates.supplierItemCode = r.supplierItemCode;
+          if (Object.keys(fillUpdates).length) await prisma.rawMaterial.update({ where: { id: existing.id }, data: fillUpdates });
+        }
+      }
+      rowsSkipped++; // never created as a new row, whether or not fields were filled
+      continue;
+    }
+    // NEW
+    const created = await prisma.rawMaterial.create({
+      data: {
+        name: r.name, supplier: r.supplier || null, manufacturer: r.manufacturer || null,
+        notes: r.notes || null, originKashrutText: r.originKashrutText || null,
+        supplierItemCode: r.supplierItemCode || null, importId: importBatch.id,
+      },
+    });
+    if (r.skuCodes.length) {
+      const skus = await prisma.sku.findMany({ where: { code: { in: r.skuCodes } } });
+      for (const sku of skus) {
+        await prisma.skuRawMaterial.create({ data: { rawMaterialId: created.id, skuId: sku.id } }).catch(() => {});
+      }
+    }
+    rowsCreated++;
+  }
+
+  await prisma.rawMaterialImport.update({ where: { id: importBatch.id }, data: { rowsCreated, rowsSkipped } });
+  res.json({ ok: true, importId: importBatch.id, rowsCreated, rowsSkipped });
 }));
 
 /* ── documents: upload a new file or link an existing Document, with a role ── */
