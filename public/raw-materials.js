@@ -492,15 +492,81 @@ async function rmImportPreview() {
       method: 'POST', body: JSON.stringify({ rows: RM_IMPORT_STATE.rows, mapping }),
     });
     RM_IMPORT_STATE.preview = result.rows;
+    RM_IMPORT_STATE.counts = result.counts;
     // duplicates unticked by default, NEW rows ticked by default, ERROR rows never selectable
     RM_IMPORT_STATE.selected = new Set(result.rows.filter(r => r.classification === 'NEW').map(r => r.rowIndex));
-    rmImportRenderPreviewStep(result.counts);
+    RM_IMPORT_STATE.sortCol = null; RM_IMPORT_STATE.sortDir = 1;
+    RM_IMPORT_STATE.filters = { supplier: '', manufacturer: '', kashrutBodyId: '', track: '', status: '' };
+    rmImportRenderPreviewStep();
   } catch (e) { showToast(e.message); }
 }
 
-function rmImportRenderPreviewStep(counts) {
-  const rows = RM_IMPORT_STATE.preview;
-  const tableRows = rows.map(r => {
+// matches the matched-existing record's approval matrix (attached per row
+// as existingApprovals) against the kashrut body / track / status filters
+function rmImportRowMatchesApprovalFilters(r, f) {
+  if (!f.kashrutBodyId && !f.track && !f.status) return true;
+  const approvals = r.existingApprovals || [];
+  return approvals.some(a =>
+    (!f.kashrutBodyId || a.kashrutBodyId === parseInt(f.kashrutBodyId)) &&
+    (!f.track || a.track === f.track) &&
+    (!f.status || a.status === f.status)
+  );
+}
+
+function rmImportVisibleRows() {
+  const f = RM_IMPORT_STATE.filters;
+  let rows = RM_IMPORT_STATE.preview.filter(r =>
+    (!f.supplier || r.supplier === f.supplier) &&
+    (!f.manufacturer || r.manufacturer === f.manufacturer) &&
+    rmImportRowMatchesApprovalFilters(r, f)
+  );
+  if (RM_IMPORT_STATE.sortCol) {
+    const col = RM_IMPORT_STATE.sortCol, dir = RM_IMPORT_STATE.sortDir;
+    const valueOf = (r) => col === 'skuCodes' ? r.skuCodes.join(', ') : col === 'classification' ? r.classification : (r[col] || '');
+    rows = rows.slice().sort((a, b) => valueOf(a).toString().localeCompare(valueOf(b).toString(), 'he') * dir);
+  }
+  return rows;
+}
+
+function rmImportSetFilter(field, value) {
+  RM_IMPORT_STATE.filters[field] = value;
+  rmImportRenderPreviewStep();
+}
+
+function rmImportSort(col) {
+  if (RM_IMPORT_STATE.sortCol === col) RM_IMPORT_STATE.sortDir *= -1;
+  else { RM_IMPORT_STATE.sortCol = col; RM_IMPORT_STATE.sortDir = 1; }
+  rmImportRenderPreviewStep();
+}
+
+function rmImportSelectVisible(select) {
+  for (const r of rmImportVisibleRows()) {
+    if (r.classification === 'ERROR') continue;
+    if (select) RM_IMPORT_STATE.selected.add(r.rowIndex); else RM_IMPORT_STATE.selected.delete(r.rowIndex);
+  }
+  rmImportRenderPreviewStep();
+}
+
+function rmImportSortArrow(col) {
+  if (RM_IMPORT_STATE.sortCol !== col) return '';
+  return RM_IMPORT_STATE.sortDir === 1 ? ' ▲' : ' ▼';
+}
+
+function rmImportRenderPreviewStep() {
+  const counts = RM_IMPORT_STATE.counts;
+  const visible = rmImportVisibleRows();
+  const suppliers = [...new Set(RM_IMPORT_STATE.preview.map(r => r.supplier).filter(Boolean))].sort();
+  const manufacturers = [...new Set(RM_IMPORT_STATE.preview.map(r => r.manufacturer).filter(Boolean))].sort();
+  const f = RM_IMPORT_STATE.filters;
+  const opt = (v, label, selected) => `<option value="${rmEscapeHtml(v)}" ${selected === v ? 'selected' : ''}>${rmEscapeHtml(label)}</option>`;
+
+  const cols = [
+    ['classification', 'סטטוס'], ['name', 'שם'], ['supplier', 'ספק'], ['manufacturer', 'יצרן'],
+    ['originKashrutText', 'כשרות מקור'], ['skuCodes', 'מק"טים'], ['supplierItemCode', 'קוד ספק'], ['reason', 'הערה'],
+  ];
+  const headerHtml = `<th></th>` + cols.map(([key, label]) => `<th style="cursor:pointer" onclick="rmImportSort('${key}')">${rmEscapeHtml(label)}${rmImportSortArrow(key)}</th>`).join('');
+
+  const tableRows = visible.map(r => {
     const disabled = r.classification === 'ERROR';
     const checked = RM_IMPORT_STATE.selected.has(r.rowIndex);
     return `<tr>
@@ -515,17 +581,38 @@ function rmImportRenderPreviewStep(counts) {
       <td style="color:var(--ink3)">${rmEscapeHtml(r.reason)}</td>
     </tr>`;
   }).join('');
+
   document.getElementById('rmImportBody').innerHTML = `
     <div class="rm-import-step">
       <div class="rm-import-counts">
         <span>🆕 חדש: <b>${counts.NEW}</b></span>
         <span>♻ קיים: <b>${counts.EXISTING}</b></span>
         <span>⚠ שגיאה: <b>${counts.ERROR}</b></span>
+        <span style="margin-right:auto;color:var(--ink3)">${visible.length} / ${RM_IMPORT_STATE.preview.length} מוצגות</span>
+      </div>
+      <div class="rm-import-map-row" style="flex-wrap:wrap;gap:8px">
+        <select onchange="rmImportSetFilter('supplier', this.value)">
+          <option value="">כל הספקים</option>${suppliers.map(s => opt(s, s, f.supplier)).join('')}
+        </select>
+        <select onchange="rmImportSetFilter('manufacturer', this.value)">
+          <option value="">כל היצרנים</option>${manufacturers.map(m => opt(m, m, f.manufacturer)).join('')}
+        </select>
+        <select onchange="rmImportSetFilter('kashrutBodyId', this.value)">
+          <option value="">כל הגופים (לרשומות קיימות)</option>${RM_STATE.allBodies.filter(b => b.active).map(b => opt(String(b.id), b.name, f.kashrutBodyId)).join('')}
+        </select>
+        <select onchange="rmImportSetFilter('track', this.value)">
+          <option value="">כל המסלולים</option>${Object.entries(RM_TRACK_LABEL).map(([k, v]) => opt(k, v, f.track)).join('')}
+        </select>
+        <select onchange="rmImportSetFilter('status', this.value)">
+          <option value="">כל הסטטוסים</option>${Object.entries(RM_STATUS_LABEL).map(([k, v]) => opt(k, v, f.status)).join('')}
+        </select>
+        <button class="btn btn-outline" style="font-size:.78rem;padding:4px 10px" onclick="rmImportSelectVisible(true)">סמן הכל</button>
+        <button class="btn btn-outline" style="font-size:.78rem;padding:4px 10px" onclick="rmImportSelectVisible(false)">בטל הכל</button>
       </div>
       <label style="display:block;margin-bottom:10px;font-size:.85rem"><input type="checkbox" id="rmImportFillEmpty"/> עדכן שדות ריקים בקיימים (רשומות קיימות לא נדרסות, רק שדות ריקים מתמלאים)</label>
       <div class="rm-import-table-wrap">
         <table class="rm-import-table">
-          <thead><tr><th></th><th>סטטוס</th><th>שם</th><th>ספק</th><th>יצרן</th><th>כשרות מקור</th><th>מק"טים</th><th>קוד ספק</th><th>הערה</th></tr></thead>
+          <thead><tr>${headerHtml}</tr></thead>
           <tbody>${tableRows}</tbody>
         </table>
       </div>

@@ -289,6 +289,22 @@ async function snapshot() {
   }
   check('R10: at least one status cell in the test row has both a label and a fill color', foundColoredStatusCell);
 
+  // R10 color-scheme fix (10.11.2026): לא נשלח blank/no-fill; everything
+  // else from the new light-fill/dark-text palette, never the old solid
+  // dot colors.
+  const NEW_PALETTE_FILLS = new Set(['FFC6EFCE', 'FFFFC7CE', 'FFFFEB9C', 'FFFFE0B2']);
+  let foundBlankNotSentCell = false, allFillsFromNewPalette = true, foundAnyFill = false;
+  for (let c = 8; c <= ws1.columnCount; c++) {
+    const cell = ws1.getRow(2).getCell(c);
+    if (!cell.value && !(cell.fill && cell.fill.fgColor)) foundBlankNotSentCell = true;
+    if (cell.fill && cell.fill.fgColor) {
+      foundAnyFill = true;
+      if (!NEW_PALETTE_FILLS.has(cell.fill.fgColor.argb)) allFillsFromNewPalette = false;
+    }
+  }
+  check('R10: at least one NOT_SENT body column is blank with no fill at all', foundBlankNotSentCell);
+  check('R10: every filled status cell uses the new light-fill palette (no old solid dot colors)', foundAnyFill && allFillsFromNewPalette);
+
   // R11: Excel/CSV import -- requireAuth gating, parse/preview/commit,
   // duplicate detection (supplierItemCode + normalized name+supplier),
   // unknown-SKU error rows, fill-empty-on-existing, importId filtering.

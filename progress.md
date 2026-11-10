@@ -789,3 +789,42 @@ deleted.
 R12 (bulk send) → R7 (add-material flow) → R8 (SKU tab) → R9
 (contacts/bodies settings), stopping after each with a browser-checkable
 summary.
+
+## Pre-R12 fixes (done)
+
+**A) R11 preview: sort, filters, select-all/none.**
+- Click any column header to sort by it (asc/desc toggle, ▲/▼ indicator).
+- Filters: supplier, manufacturer (both from the parsed file's own
+  values), plus kashrut body / track / status -- clarified with the user
+  that these three apply to the **matched existing record's current
+  approval matrix** for קיים rows (there's no body/track/status on a
+  pre-import row itself). The backend's `classifyRegImportRows()` grew an
+  optional third argument that attaches each קיים row's
+  `existingApprovals` (via the same `buildApprovalMatrixRows()` R10
+  already uses), computed only for the preview call, not for commit.
+- "סמן הכל" / "בטל הכל" tick/untick every currently-*visible* (post-filter)
+  row, skipping שגיאה rows (never selectable either way).
+
+**B) R10 export color-scheme fix.**
+- לא נשלח cells are now left completely blank -- no label text, no fill
+  -- instead of the old solid gray "לא נשלח" cell.
+- Every other status uses Excel's classic light-fill/dark-text pairs
+  instead of the old solid dot colors: approved (incl. מאושר לקטניות)
+  #C6EFCE/#006100, rejected #FFC7CE/#9C0006, pending/sent (incl. בקשת
+  פרטים, נשלח אליך לבדיקה) #FFEB9C/#9C5700, conditional #FFE0B2/#E65100.
+
+**B, side task) Looked up "אריזת פלסטיק PET לזרם המסחרי" / SKU 8455**
+(RawMaterial id 8): supplier is ת.מ.י.ר - תאגיד מחזור יצרנים בישראל בע"מ
+(the Israeli packaging-recycling compliance body), 0 approvals, 1 label
+photo document. This is a packaging-recycling-fee item, not a food
+ingredient awaiting kashrut approval -- which is exactly why it has zero
+approval activity and will never generate any. Recommended archiving it
+out of the active registry view. **Not done yet**: `RawMaterial` has no
+`archived` field at all (unlike `Document`, which already has one from
+L0) -- flagged to the user rather than guessing at adding one; no schema
+change made, nothing deleted.
+
+Regression: both fixes covered by 2 new checks in
+`prisma/test-raw-material-registry-api.js` (a NOT_SENT column is blank
+with no fill; every filled cell's color comes from the new palette, never
+the old solid dot colors). **80/80 passing.**

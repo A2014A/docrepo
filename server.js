@@ -1096,7 +1096,7 @@ function regImportNormalizeText(s) { return (s || '').toString().trim().toLowerC
 
 // Shared by preview and commit so classification can never drift between
 // what the user reviewed and what actually gets written.
-async function classifyRegImportRows(rows, mapping) {
+async function classifyRegImportRows(rows, mapping, includeExistingApprovals) {
   const get = (row, field) => (mapping[field] != null ? (row[mapping[field]] || '').toString().trim() : '');
   const parsedRows = rows.map(row => ({
     name: get(row, 'name'), supplier: get(row, 'supplier'), manufacturer: get(row, 'manufacturer'),
@@ -1118,7 +1118,7 @@ async function classifyRegImportRows(rows, mapping) {
     allExisting.map(e => [regImportNormalizeText(e.name) + '|' + regImportNormalizeText(e.supplier), e])
   );
 
-  return parsedRows.map((r, i) => {
+  const classified = parsedRows.map((r, i) => {
     const unknownCodes = r.skuCodes.filter(c => !foundCodeSet.has(c));
     let classification, matchedExistingId = null, reason = '';
     if (!r.name) { classification = 'ERROR'; reason = 'שם חסר'; }
@@ -1134,6 +1134,36 @@ async function classifyRegImportRows(rows, mapping) {
     }
     return { rowIndex: i, ...r, classification, matchedExistingId, reason };
   });
+
+  // Attach the matched existing record's current approval matrix (R11
+  // preview follow-up, 10.11.2026) -- lets the preview show/filter by
+  // kashrut body/track/status for קיים rows, to help decide whether to
+  // tick them for the fill-empty option. Blank for חדש/שגיאה rows.
+  if (includeExistingApprovals) {
+    const matchedIds = [...new Set(classified.filter(r => r.matchedExistingId != null).map(r => r.matchedExistingId))];
+    if (matchedIds.length) {
+      const [bodies, matchedRecords, approvals] = await Promise.all([
+        prisma.kashrutBody.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
+        prisma.rawMaterial.findMany({ where: { id: { in: matchedIds } } }),
+        prisma.rawMaterialApproval.findMany({ where: { rawMaterialId: { in: matchedIds } }, include: { kashrutBody: true, contact: true } }),
+      ]);
+      const recordsById = new Map(matchedRecords.map(m => [m.id, m]));
+      const approvalsByRm = new Map();
+      for (const a of approvals) {
+        if (!approvalsByRm.has(a.rawMaterialId)) approvalsByRm.set(a.rawMaterialId, []);
+        approvalsByRm.get(a.rawMaterialId).push(a);
+      }
+      for (const r of classified) {
+        if (r.matchedExistingId == null) { r.existingApprovals = []; continue; }
+        const rm = recordsById.get(r.matchedExistingId);
+        r.existingApprovals = rm ? buildApprovalMatrixRows(rm, bodies, approvalsByRm.get(rm.id) || []) : [];
+      }
+    } else {
+      for (const r of classified) r.existingApprovals = [];
+    }
+  }
+
+  return classified;
 }
 
 app.post('/api/raw-material-registry/import/parse', requireAuth, upload.single('file'), ah(async (req, res) => {
@@ -1148,7 +1178,7 @@ app.post('/api/raw-material-registry/import/parse', requireAuth, upload.single('
 app.post('/api/raw-material-registry/import/preview', requireAuth, ah(async (req, res) => {
   const { rows, mapping } = req.body || {};
   if (!Array.isArray(rows) || !mapping) return res.status(400).json({ error: 'חסרים rows/mapping' });
-  const classified = await classifyRegImportRows(rows, mapping);
+  const classified = await classifyRegImportRows(rows, mapping, true);
   res.json({
     rows: classified,
     counts: {
@@ -1339,9 +1369,22 @@ const REG_STATUS_LABEL = {
   NEEDS_INFO: 'בקשת פרטים', CONDITIONAL: 'מאושר בתנאים', APPROVED_KITNIYOT: 'מאושר לקטניות',
   SENT_FOR_REVIEW: 'נשלח אליך לבדיקה',
 };
-const REG_STATUS_COLOR = {
-  NOT_SENT: 'FFA09D98', SENT_PENDING: 'FFF59E0B', APPROVED: 'FF2D5A3D', REJECTED: 'FFDC2626',
-  NEEDS_INFO: 'FF7C3AED', CONDITIONAL: 'FF2563EB', APPROVED_KITNIYOT: 'FFEAB308', SENT_FOR_REVIEW: 'FFFDBA74',
+// R10 fix (10.11.2026): לא נשלח is left blank with no fill at all (handled
+// separately below, never looked up here). Everything else uses Excel's
+// classic light-fill/dark-text pairs; statuses not explicitly specified
+// fall into the closest bucket (NEEDS_INFO/SENT_FOR_REVIEW -> pending,
+// APPROVED_KITNIYOT -> approved).
+const REG_STATUS_FILL = {
+  SENT_PENDING: 'FFFFEB9C', SENT_FOR_REVIEW: 'FFFFEB9C', NEEDS_INFO: 'FFFFEB9C',
+  APPROVED: 'FFC6EFCE', APPROVED_KITNIYOT: 'FFC6EFCE',
+  REJECTED: 'FFFFC7CE',
+  CONDITIONAL: 'FFFFE0B2',
+};
+const REG_STATUS_FONT = {
+  SENT_PENDING: 'FF9C5700', SENT_FOR_REVIEW: 'FF9C5700', NEEDS_INFO: 'FF9C5700',
+  APPROVED: 'FF006100', APPROVED_KITNIYOT: 'FF006100',
+  REJECTED: 'FF9C0006',
+  CONDITIONAL: 'FFE65100',
 };
 const REG_TRACK_LABEL = { YEAR_ROUND: 'ימות השנה', PASSOVER: 'פסח' };
 
@@ -1376,17 +1419,19 @@ app.post('/api/raw-material-registry/export', requireAssistant, ah(async (req, r
     for (const b of bodies) {
       col++;
       const yr = byBodyTrack.get(`${b.id}|YEAR_ROUND`);
-      if (yr) {
+      if (yr && yr.status !== 'NOT_SENT') {
         const cell = excelRow.getCell(col);
         cell.value = REG_STATUS_LABEL[yr.status] || yr.status;
-        if (REG_STATUS_COLOR[yr.status]) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: REG_STATUS_COLOR[yr.status] } };
+        if (REG_STATUS_FILL[yr.status]) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: REG_STATUS_FILL[yr.status] } };
+        if (REG_STATUS_FONT[yr.status]) cell.font = { color: { argb: REG_STATUS_FONT[yr.status] } };
       }
       col++;
       const ps = byBodyTrack.get(`${b.id}|PASSOVER`);
-      if (ps) {
+      if (ps && ps.status !== 'NOT_SENT') {
         const cell = excelRow.getCell(col);
         cell.value = (REG_STATUS_LABEL[ps.status] || ps.status) + (ps.seasonYear ? ` (${ps.seasonYear})` : '');
-        if (REG_STATUS_COLOR[ps.status]) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: REG_STATUS_COLOR[ps.status] } };
+        if (REG_STATUS_FILL[ps.status]) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: REG_STATUS_FILL[ps.status] } };
+        if (REG_STATUS_FONT[ps.status]) cell.font = { color: { argb: REG_STATUS_FONT[ps.status] } };
       }
     }
   }
