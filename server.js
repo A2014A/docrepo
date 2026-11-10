@@ -933,6 +933,7 @@ function regMaterialOut(rm, extra) {
     originPassoverStatus: rm.originPassoverStatus, originPassoverText: rm.originPassoverText || '',
     originPassoverCertDocId: rm.originPassoverCertDocId, originPassoverValidUntil: rm.originPassoverValidUntil,
     supplierItemCode: rm.supplierItemCode || '', importId: rm.importId,
+    archived: rm.archived, archivedReason: rm.archivedReason || '',
     createdAt: rm.createdAt, updatedAt: rm.updatedAt,
     documents: documents.map(regDocOut),
     approvals: approvals.map(regApprovalOut),
@@ -949,8 +950,9 @@ const REG_INCLUDE = {
 
 /* ── list / CRUD ── */
 app.get('/api/raw-material-registry', requireAssistant, ah(async (req, res) => {
-  const { q, supplier, kashrutBodyId, status } = req.query;
+  const { q, supplier, kashrutBodyId, status, includeArchived } = req.query;
   const where = {};
+  if (!(includeArchived === '1' || includeArchived === 'true')) where.archived = false;
   if (q) where.name = { contains: q, mode: 'insensitive' };
   if (supplier) where.supplier = { contains: supplier, mode: 'insensitive' };
   let items = await prisma.rawMaterial.findMany({ where, include: REG_INCLUDE, orderBy: { createdAt: 'desc' } });
@@ -1005,6 +1007,28 @@ app.patch('/api/raw-material-registry/:id', requireAssistant, ah(async (req, res
   const rm = await prisma.rawMaterial.update({ where: { id }, data: updates, include: REG_INCLUDE }).catch(() => null);
   if (!rm) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
   res.json(regMaterialOut(rm, rm));
+}));
+
+/* ── archive / restore (added 10.11.2026, additive, same pattern as
+ * Document.archived/archivedReason from L0). Never deletes anything. ── */
+app.post('/api/raw-material-registry/:id/archive', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const rm = await prisma.rawMaterial.findUnique({ where: { id } });
+  if (!rm) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
+  const updated = await prisma.rawMaterial.update({
+    where: { id }, data: { archived: true, archivedReason: req.body.reason || null }, include: REG_INCLUDE,
+  });
+  res.json(regMaterialOut(updated, updated));
+}));
+
+app.post('/api/raw-material-registry/:id/restore', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const rm = await prisma.rawMaterial.findUnique({ where: { id } });
+  if (!rm) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
+  const updated = await prisma.rawMaterial.update({
+    where: { id }, data: { archived: false, archivedReason: null }, include: REG_INCLUDE,
+  });
+  res.json(regMaterialOut(updated, updated));
 }));
 
 app.delete('/api/raw-material-registry/:id', requireAuth, requireAdmin, ah(async (req, res) => {
@@ -1391,7 +1415,10 @@ const REG_TRACK_LABEL = { YEAR_ROUND: 'ימות השנה', PASSOVER: 'פסח' };
 app.post('/api/raw-material-registry/export', requireAssistant, ah(async (req, res) => {
   const ExcelJS = require('exceljs');
   const { ids } = req.body || {};
-  const where = Array.isArray(ids) && ids.length ? { id: { in: ids.map(Number) } } : {};
+  // archived hidden from exports by default (same as the list) -- an
+  // explicit ids list (the frontend always sends RM_STATE.lastFilteredIds,
+  // which already excludes archived unless "הצג גם בארכיון" is on) wins.
+  const where = Array.isArray(ids) && ids.length ? { id: { in: ids.map(Number) } } : { archived: false };
   const [items, bodies] = await Promise.all([
     prisma.rawMaterial.findMany({ where, include: REG_INCLUDE, orderBy: { name: 'asc' } }),
     prisma.kashrutBody.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }),
@@ -1634,6 +1661,8 @@ app.post('/api/raw-material-registry/bulk-send', requireAssistant, ah(async (req
 
   const materials = await prisma.rawMaterial.findMany({ where: { id: { in: rmIds } }, include: { documents: { include: { document: true } } } });
   if (materials.length !== rmIds.length) return res.status(404).json({ error: 'חומר גלם לא נמצא' });
+  const archivedInSelection = materials.filter(m => m.archived);
+  if (archivedInSelection.length) return res.status(400).json({ error: `לא ניתן לשלוח בקשות עבור חומרי גלם בארכיון: ${archivedInSelection.map(m => m.name).join(', ')}` });
   const bodies = await prisma.kashrutBody.findMany({ where: { id: { in: bodyIds } } });
   if (bodies.length !== bodyIds.length) return res.status(404).json({ error: 'גוף כשרות לא נמצא' });
 

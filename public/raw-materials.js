@@ -142,6 +142,7 @@ function rmBuildPageShell() {
       <label><input type="checkbox" id="rmNoOriginCertFilter" onchange="rmApplyFilters()"/> ללא תעודת מקור</label>
       <label><input type="checkbox" id="rmOriginPassoverFilter" onchange="rmApplyFilters()"/> כשר לפסח במקור</label>
       <label><input type="checkbox" id="rmLastImportFilter" onchange="rmApplyFilters()"/> 📥 מייבוא אחרון</label>
+      <label><input type="checkbox" id="rmShowArchivedFilter" onchange="rmApplyFilters()"/> 🗄 הצג גם בארכיון</label>
       <label><input type="checkbox" id="rmStaleToggle" onchange="rmApplyFilters()"/> ⏳ ממתין מעל
         <input type="number" id="rmStaleDays" value="14" min="1" onchange="rmApplyFilters()"/> ימים</label>
     </div>
@@ -172,7 +173,7 @@ async function rmLoad() {
   document.getElementById('rmList').innerHTML = '<div class="loading"><div class="spinner"></div>טוען...</div>';
   try {
     const [items, bodies] = await Promise.all([
-      apiFetch('/api/raw-material-registry'),
+      apiFetch('/api/raw-material-registry?includeArchived=1'), // archived-hiding is applied client-side, like every other filter here
       apiFetch('/api/kashrut-bodies'),
     ]);
     RM_STATE.items = items;
@@ -335,8 +336,14 @@ function rmApplyFilters() {
   const staleOn = document.getElementById('rmStaleToggle').checked;
   const staleDays = parseInt(document.getElementById('rmStaleDays').value) || 14;
   const lastImportOnly = document.getElementById('rmLastImportFilter').checked;
+  const showArchived = document.getElementById('rmShowArchivedFilter').checked;
 
-  const rows = RM_STATE.items.map(item => ({ item, statuses: rmStatusByBody(item, track) }));
+  // Archived items are hidden from the list, the summary counts, and the
+  // export (export sends exactly RM_STATE.lastFilteredIds) by default --
+  // applied here, before `rows`, so it affects the counts too, not just
+  // the detailed row filters below.
+  const baseItems = showArchived ? RM_STATE.items : RM_STATE.items.filter(it => !it.archived);
+  const rows = baseItems.map(item => ({ item, statuses: rmStatusByBody(item, track) }));
   // R11: "the newest import" is whichever importId is highest among loaded
   // items -- works after a page reload too, since importId persists on the row.
   const lastImportId = RM_STATE.items.reduce((max, it) => (it.importId != null && it.importId > max ? it.importId : max), -1);
@@ -756,16 +763,25 @@ function rmRenderList(rows) {
       return `<div class="rm-dot-cell"><span class="rm-dot-wrap"><span class="rm-dot" style="background:${RM_STATUS_COLOR[s.status]}" title="${rmEscapeHtml(title)}"></span>${badge}</span></div>`;
     }).join('');
     return `
-      <div class="rm-row" onclick="rmOpenCard(${item.id})" style="cursor:pointer">
-        ${rmIsReadOnly() ? '' : `<input type="checkbox" style="margin-left:4px" ${RM_STATE.bulkSelected.has(item.id) ? 'checked' : ''} onclick="event.stopPropagation();rmToggleBulkSelect(${item.id},this.checked)"/>`}
+      <div class="rm-row" onclick="rmOpenCard(${item.id})" style="cursor:pointer${item.archived ? ';opacity:.6' : ''}">
+        ${rmIsReadOnly() || item.archived ? '' : `<input type="checkbox" style="margin-left:4px" ${RM_STATE.bulkSelected.has(item.id) ? 'checked' : ''} onclick="event.stopPropagation();rmToggleBulkSelect(${item.id},this.checked)"/>`}
         <div class="rm-row-main">
-          <div class="rm-row-name">${needsReview ? '<span class="rm-needs-review">לבדוק</span>' : ''}${rmEscapeHtml(item.name)}</div>
+          <div class="rm-row-name">${needsReview ? '<span class="rm-needs-review">לבדוק</span>' : ''}${item.archived ? `<span class="rm-needs-review" style="background:#e5e7eb;color:#374151" title="${rmEscapeHtml(item.archivedReason || '')}">🗄 בארכיון</span>` : ''}${rmEscapeHtml(item.name)}</div>
           <div class="rm-row-sub">${rmEscapeHtml(item.supplier || '— ספק לא ידוע —')}${item.manufacturer ? ' · ' + rmEscapeHtml(item.manufacturer) : ''} · ${skuText}</div>
         </div>
         <div class="rm-origin-col${rmIsReadOnly() ? '' : ' rm-editable'}" data-rm-id="${item.id}"${rmIsReadOnly() ? '' : ' onclick="rmOriginCellClick(this);event.stopPropagation()"'}${origin && origin.color ? ` style="color:${origin.color}"` : ''}>${origin ? rmEscapeHtml(origin.text) : '—'}</div>
         <div class="rm-dots-grid" style="grid-template-columns:${rmGridTemplate()}">${dots}</div>
+        ${item.archived ? `<button class="btn btn-outline" style="font-size:.74rem;padding:4px 10px" onclick="event.stopPropagation();rmRestoreMaterial(${item.id})">↩ שחזר</button>` : ''}
       </div>`;
   }).join('');
+}
+
+async function rmRestoreMaterial(id) {
+  try {
+    await apiFetch('/api/raw-material-registry/' + id + '/restore', { method: 'POST' });
+    showToast('חומר הגלם שוחזר מהארכיון');
+    await rmLoad();
+  } catch (e) { showToast(e.message); }
 }
 
 // R12: "select all filtered" + the bulk-send entry point. Hidden entirely

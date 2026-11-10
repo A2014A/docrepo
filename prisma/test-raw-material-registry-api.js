@@ -423,6 +423,39 @@ async function snapshot() {
   await prisma.rawMaterialApproval.deleteMany({ where: { rawMaterialId: { in: [bulkRm1.id, bulkRm2.id] } } });
   await prisma.rawMaterial.deleteMany({ where: { id: { in: [bulkRm1.id, bulkRm2.id] } } });
 
+  // Archive/restore (10.11.2026, additive, same pattern as Document):
+  // hidden from the list/export by default, rejected from bulk-send,
+  // visible + restorable via includeArchived=1.
+  const archiveRm = await prisma.rawMaterial.create({ data: { name: 'TEST-ARCHIVE-1', supplier: 'TEST-SUP' } });
+  const archiveRes = await api('POST', `/api/raw-material-registry/${archiveRm.id}/archive`, { reason: 'TEST-לא רלוונטי' });
+  check('archive endpoint sets archived=true + archivedReason', archiveRes.status === 200 && archiveRes.body.archived === true && archiveRes.body.archivedReason === 'TEST-לא רלוונטי', archiveRes.body);
+
+  const listDefault = await api('GET', '/api/raw-material-registry');
+  check('archived record hidden from the default list', !listDefault.body.some(r => r.id === archiveRm.id));
+  const listIncluding = await api('GET', '/api/raw-material-registry?includeArchived=1');
+  check('archived record visible with includeArchived=1', listIncluding.body.some(r => r.id === archiveRm.id));
+
+  const exportDefault = await fetch(`${BASE}/api/raw-material-registry/export`, { method: 'POST', headers: { ...AUTH_HEADER, 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+  const exportDefaultBuf = Buffer.from(await exportDefault.arrayBuffer());
+  const exportDefaultWb = new ExcelJS.Workbook();
+  await exportDefaultWb.xlsx.load(exportDefaultBuf);
+  const exportDefaultWs1 = exportDefaultWb.getWorksheet('סטטוס');
+  let foundArchivedInDefaultExport = false;
+  for (let r = 2; r <= exportDefaultWs1.rowCount; r++) if (exportDefaultWs1.getCell(`A${r}`).value === 'TEST-ARCHIVE-1') foundArchivedInDefaultExport = true;
+  check('archived record excluded from a no-ids (export-all) call', !foundArchivedInDefaultExport);
+
+  const bulkSendArchived = await api('POST', '/api/raw-material-registry/bulk-send', {
+    rawMaterialIds: [archiveRm.id], kashrutBodyIds: [bodyLandau.id], tracks: ['YEAR_ROUND'], via: 'EMAIL', recordOnly: true,
+  });
+  check('bulk-send rejects an archived raw material (400)', bulkSendArchived.status === 400 && bulkSendArchived.body.error.includes('TEST-ARCHIVE-1'), bulkSendArchived.body);
+
+  const restoreRes = await api('POST', `/api/raw-material-registry/${archiveRm.id}/restore`);
+  check('restore endpoint clears archived + archivedReason', restoreRes.status === 200 && restoreRes.body.archived === false && restoreRes.body.archivedReason === '', restoreRes.body);
+  const listAfterRestore = await api('GET', '/api/raw-material-registry');
+  check('restored record reappears in the default list', listAfterRestore.body.some(r => r.id === archiveRm.id));
+
+  await prisma.rawMaterial.delete({ where: { id: archiveRm.id } });
+
   // ── cleanup ──
   // capture R2 keys before deleting the Document rows, so the objects
   // themselves can be removed too, not just the DB rows

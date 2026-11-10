@@ -403,6 +403,13 @@ model RawMaterial {
   importId         Int?
   import           RawMaterialImport? @relation(fields: [importId], references: [id])
 
+  // Added 10.11.2026, additive, same pattern as Document.archived/
+  // archivedReason (L0). Never delete -- hidden from the list/counts/
+  // exports/bulk-send by default, visible behind "הצג גם בארכיון", with a
+  // "שחזר" restore action.
+  archived       Boolean @default(false)
+  archivedReason String?
+
   documents RawMaterialDocument[]
   approvals RawMaterialApproval[]
   skus      SkuRawMaterial[]

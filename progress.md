@@ -875,6 +875,39 @@ every combination covered exactly once, missing-ids rejected). Uses
 existing single-send test, never calls nodemailer. **87/87 passing**,
 clean TEST- cleanup.
 
+## RawMaterial.archived (done)
+
+- **Schema (additive):** `RawMaterial.archived Boolean @default(false)` +
+  `archivedReason String?` -- same pattern as `Document.archived`/
+  `archivedReason` from L0. Backed up first:
+  `backups/2026-11-10T12-19-56-700Z`. Clean push, no data-loss warning.
+- **Backend:** `GET /api/raw-material-registry` excludes `archived:true`
+  by default (`?includeArchived=1` to include); `POST .../export`
+  excludes archived when no `ids` are given (an explicit `ids` list wins,
+  same as before); `POST .../bulk-send` hard-rejects (400, names the
+  items) if *any* selected raw material is archived, regardless of the
+  list toggle; new `POST .../:id/archive` (`{reason}`) and
+  `POST .../:id/restore`, both additive, neither ever deletes anything.
+- **Frontend:** the list always fetches with `includeArchived=1` and
+  applies the hide-by-default rule client-side (same architecture as
+  every other filter here), so a new "🗄 הצג גם בארכיון" checkbox affects
+  the list, the summary counts, *and* the export in one place -- the
+  export already sends exactly `RM_STATE.lastFilteredIds`. An archived
+  row shows dimmed with a "🗄 בארכיון" badge (title = the reason) and a
+  "↩ שחזר" button instead of the bulk-select checkbox.
+- Deliberately did **not** add an "archive" button to the UI -- the
+  request only asked for the hide-by-default behavior + a restore action;
+  archiving itself happens via the API for now (as done for id 8 below).
+
+**Archived RawMaterial id 8** ("אריזת פלסטיק PET לזרם המסחרי", supplier
+ת.מ.י.ר), reason "לא חומר גלם – אריזה" -- confirmed via the API, no
+longer in the default list.
+
+Regression: 7 new checks (archive sets the fields, hidden from the
+default list, visible with includeArchived=1, excluded from a no-ids
+export, bulk-send rejects it by name, restore clears both fields and it
+reappears). **94/94 passing**, clean TEST- cleanup.
+
 ### Next
 R7 (add-material flow) → R8 (SKU tab) → R9 (contacts/bodies settings),
 stopping after each with a browser-checkable summary.
