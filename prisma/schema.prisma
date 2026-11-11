@@ -20,6 +20,19 @@ enum CertType {
   ANNUAL_REGULAR_PER_PRODUCTION_PESACH // לימות השנה שנתי, לפסח לפי יצור
 }
 
+// S1 (docrepo-sprint-8.11.md, added 8.11.2026)
+enum SkuItemType {
+  FOOD
+  NOT_PRODUCT // "לא מוצר" -- hidden by default everywhere (lists, counts, missing-cert reports, L2 candidates)
+  REVIEW      // "לבדיקה"
+}
+
+enum SkuSource {
+  IMPORT       // יבוא
+  LOCAL        // רכש מקומי
+  PRIVATE_LABEL // מותג פרטי
+}
+
 enum ApprovalStatus {
   PENDING
   APPROVED
@@ -49,6 +62,74 @@ enum RequestStatus {
   FAILED
 }
 
+// ── Raw-material approval registry (added 1.11.2026, additive migration) ──
+enum RawMaterialDocRole {
+  LABEL
+  BACK_LABEL
+  ANALYSIS
+  CERT
+  SPEC
+  OTHER
+}
+
+enum RawMaterialApprovalStatus {
+  NOT_SENT
+  SENT_PENDING
+  APPROVED
+  REJECTED
+  CONDITIONAL       // valid only for track=YEAR_ROUND, enforced in the API
+  NEEDS_INFO        // added 3.11.2026 (two-track revision)
+  APPROVED_KITNIYOT // valid only for track=PASSOVER, enforced in the API; added 3.11.2026
+  SENT_FOR_REVIEW   // added 3.11.2026: email sent to REVIEW_EMAIL, not the body yet -- "✔ הועבר לגוף" moves this to SENT_PENDING
+}
+
+// Which season an approval row is for -- added 3.11.2026 (two-track revision).
+// RawMaterialApproval now has one row per (rawMaterial, kashrutBody, track).
+enum ApprovalTrack {
+  YEAR_ROUND
+  PASSOVER
+}
+
+// How a status was obtained when set directly, without a reply file --
+// added 3.11.2026.
+enum ApprovalSource {
+  PHONE
+  EMAIL
+  WHATSAPP
+  LETTER
+  PREVIOUS_YEAR
+  BODY_LIST
+  OTHER
+}
+
+// RawMaterial.originPassoverStatus -- R1 follow-up, added 3.11.2026.
+enum OriginPassoverStatus {
+  UNKNOWN
+  PASSOVER
+  PASSOVER_KITNIYOT
+  NOT_PASSOVER
+}
+
+enum RawMaterialEventType {
+  SENT
+  REPLY
+  STATUS_CHANGE
+  NOTE
+}
+
+// DEPRECATED (3.11.2026, superseded same-day by the two-track revision in
+// docrepo-phase4-v2-tracks.md -- Passover is now its own ApprovalTrack row,
+// not fields bolted onto a single row). Kept, not dropped: these columns
+// held no real data, only already-cleaned-up TEST- rows, but the "additive
+// only, never drop" rule applies regardless. Not read or written anywhere
+// in server.js or raw-materials.js as of this revision.
+enum PassoverStatus {
+  NOT_ASKED
+  PASSOVER
+  PASSOVER_KITNIYOT
+  NOT_PASSOVER
+}
+
 model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
@@ -65,6 +146,11 @@ model User {
   reviewedLinks     SkuLink[]      @relation("reviewedBy")
   requestedCerts    CertRequest[]  @relation("requestedBy")
   fulfilledCerts    CertRequest[]  @relation("fulfilledBy")
+
+  updatedRawMaterialApprovals RawMaterialApproval[]
+  rawMaterialApprovalEvents   RawMaterialApprovalEvent[]
+  decidedLinkSuggestions      LinkSuggestion[] // added 5.11.2026 (link-suggestions L2, additive)
+  rawMaterialImports          RawMaterialImport[] // R11, added 10.11.2026
 }
 
 model Customer {
@@ -97,6 +183,16 @@ model Sku {
   notes            String?
   active           Boolean   @default(true)
 
+  // S1 (docrepo-sprint-8.11.md, added 8.11.2026, additive): master SKU list
+  // import from the "מקטים ראשי" sheet. Distinct from the legacy sourceFlag/
+  // responsible fields used by the older /api/skus/import (xlsx) route --
+  // kept separate to avoid silently redefining what those already mean.
+  categoryName     String?      // קטגוריה (פריוריטי) -- free-text display name, independent of categoryId/Category
+  itemType         SkuItemType  @default(FOOD) // סוג פריט: "לא מוצר" -> NOT_PRODUCT, "לבדיקה" -> REVIEW, else FOOD
+  source           SkuSource?   // מקור (יבוא/רכש מקומי): יבוא/רכש מקומי/מותג פרטי -- null when the sheet leaves it blank
+  buyer            String?      // איש רכש
+  priorityActive   Boolean?     // פעיל בפריוריטי: כן -> true, "לא נמצא ברשימות" -> false
+
   // provenance / new-SKU detection
   origin           String[]  @default([])
   firstSeenAt      DateTime  @default(now())
@@ -105,6 +201,10 @@ model Sku {
 
   links            SkuLink[]
   certRequests     CertRequest[]
+  rawMaterials     SkuRawMaterial[]
+  linkSuggestions  LinkSuggestion[] // added 5.11.2026 (link-suggestions L2, additive)
+  goodsReceipts    GoodsReceipt[]   // added 9.11.2026 (S2, additive)
+  shelfLifeRules   ShelfLifeRule[]  // added 9.11.2026 (S2, additive)
 
   @@index([categoryId])
 }
@@ -151,7 +251,32 @@ model Document {
   uploadedBy     User?     @relation("uploadedBy", fields: [uploadedById], references: [id])
   createdAt      DateTime  @default(now())
 
+  // L0/L3 (link-suggestions spec, added 5.11.2026, additive). Never delete --
+  // archived/duplicate docs stay searchable behind an "הצג ארכיון" filter.
+  archived        Boolean  @default(false)
+  archivedReason  String?
+  noSkuNeeded     Boolean  @default(false)
+  noSkuNeededReason String? // מכתב / חשבונית / כפילות / לא רלוונטי
+  duplicateOfId   Int?
+  duplicateOf     Document?  @relation("DocumentDuplicateOf", fields: [duplicateOfId], references: [id])
+  duplicates      Document[] @relation("DocumentDuplicateOf")
+
+  // Dashboard preview-panel fix (added 9.11.2026, additive): soft delete
+  // only -- never deletes the file or the DB row. Trashed documents are
+  // excluded from the main lists/counts and appear only in the "🗑 פח"
+  // screen, with a restore action.
+  trashedAt       DateTime?
+
   links SkuLink[]
+  rawMaterialDocuments   RawMaterialDocument[]
+  rawMaterialDefaultFor  RawMaterial[]           @relation("RawMaterialDefaultDoc")
+  rawMaterialReplyFor    RawMaterialApproval[]   @relation("RawMaterialApprovalReplyDoc")
+  rawMaterialOriginCertFor RawMaterial[]         @relation("RawMaterialOriginCertDoc")
+  rawMaterialOriginPassoverCertFor RawMaterial[] @relation("RawMaterialOriginPassoverCertDoc")
+
+  identification DocIdentification? // added 3.11.2026 (link-suggestions L1, additive)
+  linkSuggestions LinkSuggestion[]  // added 5.11.2026 (link-suggestions L2, additive)
+  rawMaterialImportFor RawMaterialImport[] // R11, added 10.11.2026
 }
 
 model SkuLink {
@@ -210,4 +335,362 @@ model Contact {
   email     String?
   phone     String?
   createdAt DateTime @default(now())
+
+  // added 1.11.2026 for the raw-material registry; nullable so existing
+  // free-form contacts keep working untouched
+  kashrutBodyId Int?
+  kashrutBody   KashrutBody? @relation("ContactKashrutBody", fields: [kashrutBodyId], references: [id])
+  role          String?
+
+  defaultForBodies KashrutBody[]         @relation("KashrutBodyDefaultContact")
+  rawMaterialApprovals RawMaterialApproval[]
+}
+
+// ── Raw-material approval registry (added 1.11.2026, additive migration) ──
+// See docrepo-raw-materials-spec.md. Does not replace SkuLink/isRawMaterial/
+// approvalStatus yet -- those keep working until the new screens take over.
+
+model KashrutBody {
+  id               Int      @id @default(autoincrement())
+  name             String   @unique
+  shortName        String?
+  active           Boolean  @default(true)
+  handlesPassover  Boolean  @default(false)
+  sortOrder        Int      @default(100)
+  defaultContactId Int?
+  defaultContact   Contact? @relation("KashrutBodyDefaultContact", fields: [defaultContactId], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  contacts  Contact[]             @relation("ContactKashrutBody")
+  approvals RawMaterialApproval[]
+  originForMaterials RawMaterial[] @relation("RawMaterialOriginKashrutBody")
+}
+
+model RawMaterial {
+  id           Int       @id @default(autoincrement())
+  name         String
+  supplier     String?
+  manufacturer String?
+  defaultDocId Int?
+  defaultDoc   Document? @relation("RawMaterialDefaultDoc", fields: [defaultDocId], references: [id])
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // origin kashrut (the hechsher printed on the label itself) -- added
+  // 3.11.2026, two-track revision
+  originKashrutText    String?
+  originKashrutBodyId  Int?
+  originKashrutBody    KashrutBody? @relation("RawMaterialOriginKashrutBody", fields: [originKashrutBodyId], references: [id])
+  originCertDocId      Int?
+  originCertDoc        Document?    @relation("RawMaterialOriginCertDoc", fields: [originCertDocId], references: [id])
+  originCertValidUntil DateTime?
+  originHasCert        Boolean      @default(false)
+
+  // origin Passover marking (R1 follow-up, added 3.11.2026) -- a separate
+  // status from originKashrutBody above: the same origin body's label may
+  // say "PASSOVER" or "PASSOVER_KITNIYOT" for Pesach specifically
+  originPassoverStatus     OriginPassoverStatus @default(UNKNOWN)
+  originPassoverText       String?
+  originPassoverCertDocId  Int?
+  originPassoverCertDoc    Document?            @relation("RawMaterialOriginPassoverCertDoc", fields: [originPassoverCertDocId], references: [id])
+  originPassoverValidUntil DateTime?
+
+  // R11 (docrepo-phase4-v2-tracks.md, added 10.11.2026, additive): Excel/CSV
+  // import of raw-material lists from purchasing/the factory.
+  supplierItemCode String?
+  importId         Int?
+  import           RawMaterialImport? @relation(fields: [importId], references: [id])
+
+  // Added 10.11.2026, additive, same pattern as Document.archived/
+  // archivedReason (L0). Never delete -- hidden from the list/counts/
+  // exports/bulk-send by default, visible behind "הצג גם בארכיון", with a
+  // "שחזר" restore action.
+  archived       Boolean @default(false)
+  archivedReason String?
+
+  // R7 (docrepo-phase4-v2-tracks.md, added 10.11.2026, additive):
+  // "🤖 זהה מהתווית" suggests this from the label photo; always confirmed/
+  // editable by the user before saving, never auto-filled silently.
+  allergens String?
+
+  documents RawMaterialDocument[]
+  approvals RawMaterialApproval[]
+  skus      SkuRawMaterial[]
+}
+
+model RawMaterialImport {
+  id          Int       @id @default(autoincrement())
+  fileDocId   Int?
+  fileDoc     Document? @relation(fields: [fileDocId], references: [id])
+  byUserId    Int?
+  byUser      User?     @relation(fields: [byUserId], references: [id])
+  at          DateTime  @default(now())
+  rowsCreated Int       @default(0)
+  rowsSkipped Int       @default(0)
+
+  rawMaterials RawMaterial[]
+}
+
+model RawMaterialDocument {
+  id            Int                @id @default(autoincrement())
+  rawMaterialId Int
+  rawMaterial   RawMaterial        @relation(fields: [rawMaterialId], references: [id])
+  documentId    Int
+  document      Document           @relation(fields: [documentId], references: [id])
+  docRole       RawMaterialDocRole @default(OTHER)
+  uploadedAt    DateTime           @default(now())
+
+  @@index([rawMaterialId])
+}
+
+model RawMaterialApproval {
+  id            Int                       @id @default(autoincrement())
+  rawMaterialId Int
+  rawMaterial   RawMaterial               @relation(fields: [rawMaterialId], references: [id])
+  kashrutBodyId Int
+  kashrutBody   KashrutBody               @relation(fields: [kashrutBodyId], references: [id])
+  contactId     Int?
+  contact       Contact?                  @relation(fields: [contactId], references: [id])
+  status        RawMaterialApprovalStatus @default(NOT_SENT)
+  kashrutLevel  String?
+  track         ApprovalTrack             @default(YEAR_ROUND) // added 3.11.2026, two-track revision
+  seasonYear    String?                                        // PASSOVER rows: Hebrew year, e.g. תשפ"ז
+  approvalSource       ApprovalSource?  // how a status was obtained when there's no reply file -- required in that case, enforced in the API
+  approvalSourceDetail String?         // free text, e.g. who said it / which email / which year
+  // DEPRECATED 3.11.2026 -- superseded by track/seasonYear above. Not
+  // dropped (held no real data), not read/written anywhere anymore.
+  passoverStatus PassoverStatus           @default(NOT_ASKED)
+  passoverYear  String?
+  passoverNote  String?
+  sentAt        DateTime?
+  sentVia       RequestChannel?
+  sentDocIds    Json?
+  replyAt       DateTime?
+  replyDocId    Int?
+  replyDoc      Document?                 @relation("RawMaterialApprovalReplyDoc", fields: [replyDocId], references: [id])
+  conditionText String?
+  validUntil    DateTime?
+  notes         String?
+  updatedById   Int?
+  updatedBy     User?                     @relation(fields: [updatedById], references: [id])
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+
+  events RawMaterialApprovalEvent[]
+
+  @@unique([rawMaterialId, kashrutBodyId, track])
+}
+
+model RawMaterialApprovalEvent {
+  id         Int                        @id @default(autoincrement())
+  approvalId Int
+  approval   RawMaterialApproval        @relation(fields: [approvalId], references: [id])
+  type       RawMaterialEventType
+  fromStatus RawMaterialApprovalStatus?
+  toStatus   RawMaterialApprovalStatus?
+  payload    Json?
+  byUserId   Int?
+  byUser     User?                      @relation(fields: [byUserId], references: [id])
+  at         DateTime                   @default(now())
+
+  @@index([approvalId])
+}
+
+model SkuRawMaterial {
+  id            Int         @id @default(autoincrement())
+  skuId         Int
+  sku           Sku         @relation(fields: [skuId], references: [id])
+  rawMaterialId Int
+  rawMaterial   RawMaterial @relation(fields: [rawMaterialId], references: [id])
+  notes         String?
+  createdAt     DateTime    @default(now())
+
+  @@unique([skuId, rawMaterialId])
+}
+
+// ── Link-suggestions L1: per-document identification cache (added 3.11.2026, additive) ──
+// source=FREE: resolved locally via pdf-parse text layer + regex (no Claude call, $0).
+// source=HAIKU: free step didn't yield enough; Claude Haiku filled in the fields.
+// source=HAIKU_FAILED: Haiku call errored -- retryable on the next run.
+// source=UNSUPPORTED: file type /api/identify can't read (e.g. .msg, .txt) -- skipped, not retried.
+enum DocIdentSource {
+  FREE
+  HAIKU
+  HAIKU_FAILED
+  UNSUPPORTED
+  PENDING_HAIKU // free step ran, incomplete, but no ANTHROPIC_API_KEY was available yet -- retried like HAIKU_FAILED
+}
+
+model DocIdentification {
+  id             Int             @id @default(autoincrement())
+  documentId     Int             @unique
+  document       Document        @relation(fields: [documentId], references: [id])
+
+  docKind        String?         // תעודת בד"ץ / תעודת רבנות / בקשה לרבנות / דוח ייצור / תווית / מכתב / חשבונית / אחר
+  certNo         String?
+  requestNo      String?
+  products       Json?           // string[] -- product names as written
+  manufacturer   String?
+  kashrutBody    String?
+  track          String?         // ימות השנה / פסח / פסח-קטניות
+  validUntil     DateTime?
+  productionDate DateTime?
+  lots           Json?           // string[] -- LOT / production-date strings as written
+
+  freeSkuCodes      Json?        // string[] -- exact SKU codes found in the free text-layer scan
+  freeCertCandidate String?      // 5-6 digit number found near מספר/תעודה/בקשה, before any Haiku call
+  hasTextLayer      Boolean      @default(false)
+  pageCount         Int?
+  r2Etag            String?      // for MD5 matching against a Drive index later
+
+  rawText        String?         // first ~2000 chars of extracted/free text, for debugging
+  source         DocIdentSource
+  model          String?         // e.g. claude-haiku-4-5-20251001, null when source=FREE
+  costInputTokens  Int?
+  costOutputTokens Int?
+  errorMessage     String?
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([source])
+}
+
+// ── Link-suggestions L2: rules-only candidate-SKU engine (added 5.11.2026, additive) ──
+// Editable alias table (spec signal #4) -- manufacturer names on documents
+// don't always match the SKU's "supplier" field; this maps known variants.
+model SupplierAlias {
+  id               Int      @id @default(autoincrement())
+  manufacturerName String   // name as it appears on documents (e.g. "PRIMA FOOD INGREDIENTS")
+  supplierName     String   // name as it appears in Sku.supplier/supplier2 (e.g. "AFFCO")
+  createdAt        DateTime @default(now())
+
+  @@unique([manufacturerName, supplierName])
+}
+
+enum LinkSuggestionConfidence {
+  CERTAIN
+  LIKELY
+  POSSIBLE
+}
+
+enum LinkSuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model LinkSuggestion {
+  id           Int                      @id @default(autoincrement())
+  documentId   Int
+  document     Document                 @relation(fields: [documentId], references: [id])
+  skuId        Int
+  sku          Sku                      @relation(fields: [skuId], references: [id])
+  confidence   LinkSuggestionConfidence
+  reasons      Json                     // signal booleans + matched details, for review/debugging
+  status       LinkSuggestionStatus     @default(PENDING)
+  decidedById  Int?
+  decidedBy    User?                    @relation(fields: [decidedById], references: [id])
+  decidedAt    DateTime?
+  createdAt    DateTime                 @default(now())
+
+  @@unique([documentId, skuId])
+  @@index([confidence])
+  @@index([documentId])
+}
+
+// ── L2 item 9 (added 5.11.2026, additive): tracking-spreadsheet import. ──
+// Read-only mirror of two CSVs the user maintains outside docrepo (requests.csv,
+// rabbinate-certs.csv) that already map Rabbinate request/cert numbers to SKUs.
+// Re-runnable: each import wipes rows for that sourceFile and reinserts fresh,
+// so replacing the CSV and re-running keeps this table in sync. No Google
+// credentials -- plain local CSV files under docrepo/imports/.
+enum TrackingSheetKind {
+  REQUEST // from requests.csv -- one row per product per request (סימוכין)
+  CERT    // from rabbinate-certs.csv -- one row per product per certificate (מס' תעודה)
+}
+
+model TrackingSheetMap {
+  id                Int               @id @default(autoincrement())
+  kind              TrackingSheetKind
+  refNumber         String            // סימוכין (REQUEST) or מס' תעודה (CERT)
+  product           String?
+  kashrutBody       String?
+  manufacturer      String?
+  track             String?           // סוג הבקשה (REQUEST) or לימות השנה/פסח (CERT)
+  validUntil        DateTime?         // תוקף תעודת רבנות (REQUEST) or תוקף (CERT)
+  lotCodes          String?           // קוד ייצור (REQUEST) or קודי ייצור ותאריכים (CERT)
+  certainSkuCodes   Json?             // string[] -- מק"ט (REQUEST, single) or מקטים מותאמים ודאי (CERT, list)
+  possibleSkuCodes  Json?             // string[] -- מקטים מועמדים לבדיקה (CERT only)
+  linkedCertNo      String?           // מספר תעודת רבנות (REQUEST only) -- links the request to its resulting cert
+  barcode           String?           // ברקוד (REQUEST only)
+  requestStatus     String?           // סטטוס בקשה (REQUEST only)
+  submittedDate     DateTime?         // תאריך הגשה (REQUEST only)
+  sourceFile        String            // "requests.csv" | "rabbinate-certs.csv" -- which import wiped/wrote this row
+  rawRow            Json              // original CSV row, for audit/debugging
+  createdAt         DateTime          @default(now())
+
+  @@index([kind, refNumber])
+  @@index([sourceFile])
+}
+
+// S2 (docrepo-sprint-8.11.md, added 9.11.2026, additive): goods-receipt
+// (קבלת סחורה) import from Priority/WMS stock exports, plus the coverage
+// check ("ייצורים לא מכוסים") that is the feature's core purpose.
+model GoodsReceipt {
+  id                      Int       @id @default(autoincrement())
+  skuId                   Int
+  sku                     Sku       @relation(fields: [skuId], references: [id])
+  receiptNo               String    // קליטה
+  receiptDate             DateTime  // תאריך קליטה
+  expiry                  DateTime  // פג תוקף
+  quantity                Float     // סכום כמות עבור כל שורות המיקום של אותה קליטה+תוקף
+  batch                   String?   // אצווה
+  productionDate          DateTime? // תאריך יצור, אם קיים בקובץ
+  estimatedProductionDate DateTime? // מחושב מתוקף פחות חיי מדף, רק כשאין תאריך יצור בקובץ
+  shelfLifeMonthsUsed     Int?
+  shelfLifeFlag           String?   // "חיי מדף שגויים" כשהאומדן נופל אחרי תאריך הקליטה
+  warehouseGroup          String?   // קבוצת פריט
+  covered                 Boolean?  // תוצאת בדיקת הכיסוי (רק למק"טי יבוא) -- null = לא רלוונטי (לא מק"ט יבוא)
+  coverageVia             String?   // RABBINATE | BADATZ_CERT | BADATZ_REPORT | DOCUMENT
+  coverageMatchedBy       String?   // VALID_ON_RECEIPT_DATE | PRODUCTION_DATE | LOT
+  sourceFile              String
+  importedAt              DateTime  @default(now())
+
+  @@unique([skuId, receiptNo, expiry])
+  @@index([skuId])
+  @@index([covered])
+}
+
+// Editable per-SKU / per-category shelf-life override, used to estimate a
+// receipt's production date when the file has none. Exactly one of skuId /
+// categoryName should be set per row. Code-level defaults (category
+// "שימורים" = 36mo, product name containing "וואקום" = 24mo) are the
+// fallback when no row here matches.
+model ShelfLifeRule {
+  id           Int      @id @default(autoincrement())
+  skuId        Int?     @unique
+  sku          Sku?     @relation(fields: [skuId], references: [id])
+  categoryName String?
+  months       Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([categoryName])
+}
+
+// S5 fix (11.11.2026): enforces IDENTIFY_MONTHLY_TOKEN_CAP. One row per
+// calendar month ("2026-11"), shared by the live /api/identify* endpoints
+// in server.js AND the standalone L1 batch scripts (separate processes,
+// so a DB row -- not an in-memory counter -- is the only way they can
+// share one monthly total).
+model HaikuUsage {
+  id           Int      @id @default(autoincrement())
+  yearMonth    String   @unique
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  callCount    Int      @default(0)
+  updatedAt    DateTime @updatedAt
 }
