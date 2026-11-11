@@ -1040,3 +1040,61 @@ request with no Bearer token before ever reaching the admin check).
 R1 → R2 → R3 → R4 → R5 → R6 → R10 → R11 → R12 → R7 → R8 → R9, every step
 additive, backed up first, stopped after each with a browser-checkable
 summary and a `progress.md` update. Nothing pushed, merged, or deployed.
+
+## S5 — pre-deploy hardening (done)
+
+- **Checklist pass**: confirmed `prisma db push` in sync, enumerated every
+  `process.env.*` reference, ran the full regression suite (152
+  assertions at the time), found two real gaps -- `JWT_SECRET` falling
+  back to a hardcoded string committed in `server.js`, and
+  `IDENTIFY_MONTHLY_TOKEN_CAP` not being read anywhere -- and added
+  startup warnings for both plus for any user still on a default
+  password (`warnIfDefaultPasswords()`). Committed as `cc0dfa7`.
+- **Demo mode -- server-side enforcement** (`d4a43d4`): previously only
+  enforced by hiding UI buttons. Added a global Express middleware
+  (`rejectIfDemoMode`) that refuses every `POST/PUT/PATCH/DELETE`
+  carrying `X-Demo-Mode: 1`, except an explicit, individually-verified
+  exempt list of mutating-method routes that never actually write
+  (previews, exports, AI-identify, login). `authHeaders()` in
+  `index.html` now adds that header automatically whenever `?demo=1` is
+  set, so every screen's write calls are covered without per-file
+  changes. All 8 named screens' write buttons now delegate to one shared
+  `isReadOnlyMode()` check instead of each rolling its own.
+- **`IDENTIFY_MONTHLY_TOKEN_CAP` enforcement** (`d4a43d4`): new additive
+  `HaikuUsage` table (one row per calendar month), shared by the three
+  live `/api/identify*` endpoints and the standalone L1 batch pipeline
+  (`prisma/_haiku-identify-lib.js`'s `callHaiku`, since that's a
+  separate process and needs a DB row, not an in-memory counter, to
+  share state). New Haiku calls are refused once the month's token total
+  reaches the configured cap. `GET /api/haiku-usage` (admin-only) +  a
+  small display in the role-codes admin modal show the current month's
+  usage.
+- **Regression**: new `prisma/test-demo-mode-and-haiku-cap.js` -- hits
+  the live DB but only ever touches `TEST-` fixtures it creates and
+  deletes itself, never sends a non-demo write to a pre-existing record.
+  23/23 checks. All prior suites re-run clean (175 assertions total).
+- **npm audit (targeted fix only)** (`c35f559`): ran `npm update
+  body-parser proxy-addr qs` instead of a blanket `npm audit fix`, so
+  nodemailer (flagged, but a 9->10 major bump) stayed untouched, along
+  with prisma and xlsx/exceljs which need `--force` and are tracked as
+  follow-ups below. Resolves the critical proxy-addr IP-spoofing finding
+  plus the body-parser/qs findings. `package.json` unchanged (all three
+  are transitive deps of express, not direct deps); only
+  `package-lock.json` moved. 175/175 regression assertions re-run clean
+  after the restart.
+
+### Follow-up (not done, deliberately deferred)
+1. **nodemailer 9 -> 10 upgrade** -- flagged high severity by npm audit
+   (multiple advisories, fix is 10.1.4+). Needs a real test email sent
+   to the user's own address before trusting it, since it's a major
+   version bump touching the actual send path, not just a patch.
+2. **Move Excel parsing off `xlsx`** -- `xlsx` has two high-severity
+   findings with **no fix available at all** (prototype pollution +
+   ReDoS). `exceljs` is already a direct dependency used elsewhere in
+   this app; the long-term fix is to migrate whatever still uses `xlsx`
+   for parsing onto `exceljs` instead, then drop the `xlsx` dependency.
+3. **prisma 6 -> 7 upgrade** -- needed to resolve the `deepmerge-ts`
+   high-severity finding (via `@prisma/config`), but `npm audit fix
+   --force` reported it as a breaking change. Needs its own dedicated
+   pass (schema compat check, regression suite re-run) rather than
+   being folded into a dependency-audit commit.
