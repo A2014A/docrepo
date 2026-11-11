@@ -1083,17 +1083,27 @@ summary and a `progress.md` update. Nothing pushed, merged, or deployed.
   `package-lock.json` moved. 175/175 regression assertions re-run clean
   after the restart.
 
+### nodemailer 9 -> 10 upgrade (done) (`8c35d0e`)
+Checked the v10 changelog against our actual usage: requires Node >=20
+(we run v24, fine); the TLS-strict-by-default change only affects
+content nodemailer fetches itself (OAuth2 endpoints, path/href
+attachments) -- we always pass attachment content as an already-fetched
+stream from R2, and use app-password auth, not OAuth2, so neither
+applies; `service: 'gmail'` well-known preset confirmed still supported.
+No code changes needed in `server.js`'s `getMailer()`/`sendMail()` call
+sites. Verified with one real test email sent to `EMAIL_FROM`
+(`REVIEW_EMAIL` unset locally) after explicit approval of the exact
+recipient address -- accepted, zero rejections, nothing sent to any
+kashrut body or other contact. 175/175 regression assertions re-run
+clean after the restart.
+
 ### Follow-up (not done, deliberately deferred)
-1. **nodemailer 9 -> 10 upgrade** -- flagged high severity by npm audit
-   (multiple advisories, fix is 10.1.4+). Needs a real test email sent
-   to the user's own address before trusting it, since it's a major
-   version bump touching the actual send path, not just a patch.
-2. **Move Excel parsing off `xlsx`** -- `xlsx` has two high-severity
+1. **Move Excel parsing off `xlsx`** -- `xlsx` has two high-severity
    findings with **no fix available at all** (prototype pollution +
    ReDoS). `exceljs` is already a direct dependency used elsewhere in
    this app; the long-term fix is to migrate whatever still uses `xlsx`
    for parsing onto `exceljs` instead, then drop the `xlsx` dependency.
-3. **prisma 6 -> 7 upgrade** -- needed to resolve the `deepmerge-ts`
+2. **prisma 6 -> 7 upgrade** -- needed to resolve the `deepmerge-ts`
    high-severity finding (via `@prisma/config`), but `npm audit fix
    --force` reported it as a breaking change. Needs its own dedicated
    pass (schema compat check, regression suite re-run) rather than
