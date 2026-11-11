@@ -1204,6 +1204,7 @@ initAuth();loadStats();loadTags();loadDocs();
       </div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">הערות</label><input type="text" class="form-input" id="skuEditNotes"/></div>
     </div>
+    <div id="skuEditRawMaterialsTab"></div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeSkuEdit()">ביטול</button>
       <button class="btn btn-accent" onclick="saveSkuEdit()">שמור שינויים</button>
@@ -1963,6 +1964,7 @@ function openEditSku(id){
   document.getElementById('skuEditCertType').innerHTML='<option value="">— בחר —</option>'+CERT_TYPE_OPTIONS.map(o=>`<option value="${o.value}">${o.label}</option>`).join('');
   document.getElementById('skuEditCertType').value=s.certType||'';
   document.getElementById('skuEditModal').classList.add('open');
+  if (typeof skuRmTabOpen === 'function') skuRmTabOpen(s.id);
 }
 
 async function saveSkuEdit(){
@@ -3060,5 +3062,6 @@ if ('serviceWorker' in navigator) {
 <script src="/goods-receipts-import.js"></script>
 <script src="/dashboard.js"></script>
 <script src="/trash-screen.js"></script>
+<script src="/sku-raw-materials-tab.js"></script>
 </body>
 </html>

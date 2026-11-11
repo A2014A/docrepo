@@ -255,7 +255,32 @@ async function snapshot() {
   check('GET impact view (raw material -> SKUs) shows the linked SKU', impact.status === 200 && impact.body.some(s => s.id === anySku.code));
 
   const skuView = await api('GET', `/api/skus/${anySku.code}/raw-materials`);
-  check('GET SKU view (SKU -> raw materials) shows this raw material', skuView.status === 200 && skuView.body.some(r => r.rawMaterialId === id));
+  check('GET SKU view (SKU -> raw materials) shows this raw material', skuView.status === 200 && skuView.body.items.some(r => r.rawMaterialId === id));
+
+  // R8 fix (11.11.2026): a dedicated test SKU whose required body
+  // (bodyLandau, via the alias "לנדא") matches real approvals already set
+  // on `id`'s raw material above -- YEAR_ROUND=APPROVED (from the reply),
+  // PASSOVER=APPROVED_KITNIYOT (from the also-track close) -- to verify
+  // the two tracks are actually split, not just "whichever came first".
+  const r8Sku = await prisma.sku.create({ data: { code: 'TEST-R8-SKU', name: 'TEST-R8 מקט', kashrutBodyRef: 'לנדא', active: true } });
+  const r8Link = await api('POST', `/api/raw-material-registry/${id}/skus`, { skuCode: r8Sku.code });
+  check('R8: link the test SKU to the same raw material', r8Link.status === 201, r8Link.body);
+  const r8View = await api('GET', `/api/skus/${r8Sku.code}/raw-materials`);
+  const r8Item = r8View.body.items.find(r => r.rawMaterialId === id);
+  check('R8: requiredKashrutBody resolves the alias to the real body name', r8View.body.requiredKashrutBody === bodyLandau.name, r8View.body);
+  check('R8: YEAR_ROUND required-approval is the real APPROVED row (not PASSOVER\'s)', r8Item && r8Item.requiredApprovalYearRound && r8Item.requiredApprovalYearRound.status === 'APPROVED' && r8Item.requiredApprovalYearRound.track === 'YEAR_ROUND', r8Item);
+  check('R8: PASSOVER required-approval is the real APPROVED_KITNIYOT row (both tracks present, not just one)', r8Item && r8Item.requiredApprovalPassover && r8Item.requiredApprovalPassover.status === 'APPROVED_KITNIYOT' && r8Item.requiredApprovalPassover.track === 'PASSOVER', r8Item);
+  // per-item summaryYearRound/summaryPassover deliberately summarize this
+  // raw material's status across ALL bodies for that track (general
+  // health), not just the required body -- `id`'s material has other
+  // bodies' approvals in non-APPROVED states from earlier in this test,
+  // so MISSING here is correct; the required-body-specific status is
+  // requiredApprovalYearRound/Passover above, already verified.
+  check('R8: per-item summaryYearRound/summaryPassover reflect ALL bodies, not just the required one (MISSING here, since other bodies aren\'t all approved)', r8Item && r8Item.summaryYearRound === 'MISSING' && r8Item.summaryPassover === 'MISSING', r8Item);
+  check('R8: top-level summary badges (one per track) both ALL_APPROVED', r8View.body.summaryBadgeYearRound === 'ALL_APPROVED' && r8View.body.summaryBadgePassover === 'ALL_APPROVED', r8View.body);
+
+  await prisma.skuRawMaterial.deleteMany({ where: { skuId: r8Sku.id } });
+  await prisma.sku.delete({ where: { id: r8Sku.id } });
 
   // export endpoint: must reject without a key -- EXPORT_API_KEY isn't set in
   // .env yet, so this also confirms it fails closed rather than open

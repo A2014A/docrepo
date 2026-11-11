@@ -958,3 +958,45 @@ instead, as above. **98/98 passing**, clean TEST- cleanup.
 ### Next
 R8 (SKU tab) → R9 (contacts/bodies settings), stopping after each with a
 browser-checkable summary.
+
+## R8 — SKU tab (done)
+
+- **Found and fixed a real bug before building anything new**: the
+  backend endpoint this step needed (`GET /api/skus/:code/raw-materials`)
+  already existed from Phase 3, but predated the two-track revision --
+  it picked *whichever* approval row for the SKU's required body
+  happened to come first, with no regard for track at all. R8 explicitly
+  asks for "both tracks" + "a summary badge per track", which this old
+  shape couldn't express. Rewrote it: `requiredApprovalYearRound` /
+  `requiredApprovalPassover` are now looked up separately, and the
+  response grew `summaryBadgeYearRound`/`summaryBadgePassover` -- one
+  per track, aggregated across the SKU's (non-archived) linked raw
+  materials' status for the required body specifically.
+- Kept (and clarified with a comment) the pre-existing per-item
+  `summaryYearRound`/`summaryPassover` fields, which deliberately
+  summarize a raw material's status across *every* body it's been sent
+  to, not just the SKU's required one -- a different, still-useful
+  signal (e.g. flags a material whose required body is fine but some
+  other body rejected it). Caught my own test asserting the wrong thing
+  here on the first run and fixed the assertion, not the code, once I
+  traced through why -- the two fields answer different questions on
+  purpose.
+- **New "SKU tab"** inside the existing SKU edit modal
+  (`public/sku-raw-materials-tab.js`, self-contained, own styles): one
+  empty container + one call at the end of the existing `openEditSku()`
+  + one `<script>` tag were the only edits to `index.html`. Shows the
+  SKU's required kashrut body, the two per-track summary badges, and a
+  row per linked (non-archived) raw material with a colored dot +
+  Hebrew status for each track plus a "פתח" button that closes the SKU
+  modal and opens that raw material's card in the registry.
+
+Regression: `prisma/test-raw-material-registry-api.js` extended with 6
+checks, using a dedicated test SKU whose required body (via the existing
+"לנדא" -> "הרב לנדא" alias) matches real approvals already set earlier in
+the test (YEAR_ROUND=APPROVED, PASSOVER=APPROVED_KITNIYOT) -- confirms
+both tracks are genuinely split, not just "whichever came first", plus
+the alias resolution and both summary-badge levels. **104/104 passing**,
+clean TEST- cleanup.
+
+### Next
+R9 (contacts/bodies settings), stopping with a browser-checkable summary.

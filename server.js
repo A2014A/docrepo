@@ -1958,6 +1958,11 @@ app.get('/api/approvals/:id/events', requireAssistant, ah(async (req, res) => {
 
 /* ── SKU view: this SKU's raw materials + the approval for its own required
  * kashrut body (from the SKU's כשרות field) + a per-material summary ── */
+// R8 (docrepo-phase4-v2-tracks.md, fixed 11.11.2026): this endpoint
+// predates the two-track revision and originally picked whichever
+// approval row for the required body happened to come first, ignoring
+// track entirely. Now split per track, each with its own status/summary,
+// so "the SKU's required body, both tracks" is actually both tracks.
 app.get('/api/skus/:id/raw-materials', requireAssistant, ah(async (req, res) => {
   const sku = await prisma.sku.findUnique({ where: { code: req.params.id } });
   if (!sku) return res.status(404).json({ error: 'מקט לא נמצא' });
@@ -1966,24 +1971,47 @@ app.get('/api/skus/:id/raw-materials', requireAssistant, ah(async (req, res) => 
     include: { rawMaterial: { include: REG_INCLUDE } },
   });
   const requiredBodyName = resolveKashrutBodyName(sku.kashrutBodyRef);
-  res.json(links.map((l) => {
-    const rm = l.rawMaterial;
-    const requiredApproval = requiredBodyName
-      ? rm.approvals.find((a) => a.kashrutBody.name === requiredBodyName) || null
-      : null;
-    const statuses = rm.approvals.map((a) => a.status);
-    const summary = statuses.length === 0 ? 'NONE'
-      : statuses.every((s) => s === 'APPROVED') ? 'ALL_APPROVED'
+
+  function summaryFor(statuses) {
+    return statuses.length === 0 ? 'NONE'
+      : statuses.every((s) => s === 'APPROVED' || s === 'APPROVED_KITNIYOT') ? 'ALL_APPROVED'
       : statuses.some((s) => s === 'REJECTED') ? 'HAS_REJECTED'
       : 'MISSING';
+  }
+
+  const items = links.map((l) => {
+    const rm = l.rawMaterial;
+    const requiredApprovalYearRound = requiredBodyName
+      ? rm.approvals.find((a) => a.kashrutBody.name === requiredBodyName && a.track === 'YEAR_ROUND') || null
+      : null;
+    const requiredApprovalPassover = requiredBodyName
+      ? rm.approvals.find((a) => a.kashrutBody.name === requiredBodyName && a.track === 'PASSOVER') || null
+      : null;
     return {
-      rawMaterialId: rm.id, name: rm.name, supplier: rm.supplier || '',
+      rawMaterialId: rm.id, name: rm.name, supplier: rm.supplier || '', archived: rm.archived,
       documents: rm.documents.map(regDocOut),
       requiredKashrutBody: requiredBodyName,
-      requiredApproval: requiredApproval ? regApprovalOut(requiredApproval) : null,
-      summary,
+      requiredApprovalYearRound: requiredApprovalYearRound ? regApprovalOut(requiredApprovalYearRound) : null,
+      requiredApprovalPassover: requiredApprovalPassover ? regApprovalOut(requiredApprovalPassover) : null,
+      // General health across EVERY body this material has been sent to,
+      // not just the SKU's required one -- deliberately a different
+      // signal from requiredApproval*/summaryBadge* above (e.g. flags a
+      // material whose required body is fine but another body rejected it).
+      summaryYearRound: summaryFor(rm.approvals.filter(a => a.track === 'YEAR_ROUND').map(a => a.status)),
+      summaryPassover: summaryFor(rm.approvals.filter(a => a.track === 'PASSOVER').map(a => a.status)),
     };
-  }));
+  });
+
+  // one summary badge per track, across every (non-archived) linked raw
+  // material's status for the SKU's required body specifically
+  const active = items.filter(it => !it.archived);
+  const badgeFor = (field) => summaryFor(active.map(it => it[field] && it[field].status).filter(Boolean));
+  res.json({
+    requiredKashrutBody: requiredBodyName,
+    summaryBadgeYearRound: requiredBodyName ? badgeFor('requiredApprovalYearRound') : 'NONE',
+    summaryBadgePassover: requiredBodyName ? badgeFor('requiredApprovalPassover') : 'NONE',
+    items,
+  });
 }));
 
 /* ── link this raw material to a SKU. Not called out as its own endpoint in
