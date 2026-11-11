@@ -1000,3 +1000,43 @@ clean TEST- cleanup.
 
 ### Next
 R9 (contacts/bodies settings), stopping with a browser-checkable summary.
+
+## R9 — Contacts and bodies settings (done, last step of S4)
+
+- **No contacts/bodies management UI existed at all** before this --
+  only `GET`/`POST`/`DELETE /api/contacts` and a bare `GET
+  /api/kashrut-bodies` existed, with no frontend caller for any of them.
+- **Contacts**: `POST /api/contacts` now also accepts `kashrutBodyId` +
+  `role`; new `PATCH /api/contacts/:id` edits name/email/phone/body/role
+  (rejects clearing both email and phone, same rule as create). **No
+  delete button anywhere in the new screen** -- the pre-existing `DELETE
+  /api/contacts/:id` is untouched but has no caller here, per "do not
+  delete existing contacts."
+- **Bodies settings (admin only)**: new `PATCH /api/kashrut-bodies/:id`
+  (`requireAuth`+`requireAdmin` -- edits only, never creates/deletes a
+  body) for shortName/active/handlesPassover/sortOrder/defaultContactId;
+  `kashrutBodyOut()` now also exposes `defaultContactId` (it didn't
+  before). The section is always shown in the UI, same convention as the
+  existing "🔑 ניהול קודי גישה" admin screen -- a non-admin gets a
+  rejection toast on save rather than the section being hidden
+  client-side.
+- **New self-contained screen**
+  (`public/contacts-bodies-settings.js`, "👥 אנשי קשר וגופי כשרות"): one
+  table for contacts (editable inline, add-new row at the bottom) and
+  one for the 11 seeded bodies (editable inline: short name, active,
+  handles-Passover, sort order, and a default-contact dropdown scoped to
+  contacts already assigned to that body). One nav button + one empty
+  container + one script tag in `index.html`.
+
+Regression: `prisma/test-raw-material-registry-api.js` extended with 6
+checks (contact create/reassign/validation, all 5 body-settings fields
+update together, `defaultContactId` now exposed, the admin-only PATCH
+correctly rejected for assistant-code-only auth -- caught my own test
+asserting 403 instead of the real 401, since `requireAuth` rejects a
+request with no Bearer token before ever reaching the admin check).
+**110/110 passing**, clean TEST- cleanup.
+
+### S4 complete
+R1 → R2 → R3 → R4 → R5 → R6 → R10 → R11 → R12 → R7 → R8 → R9, every step
+additive, backed up first, stopped after each with a browser-checkable
+summary and a `progress.md` update. Nothing pushed, merged, or deployed.

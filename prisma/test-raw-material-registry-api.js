@@ -505,6 +505,43 @@ async function snapshot() {
 
   await prisma.rawMaterial.delete({ where: { id: r7Create.body.id } });
 
+  // R9: contacts (create/edit/assign to a body, never deleted by this
+  // screen) + bodies settings (admin only).
+  const r9Contact = await api('POST', '/api/contacts', {
+    name: 'TEST-R9-Contact', email: 'test-r9@example.com', kashrutBodyId: bodyLandau.id, role: 'משגיח',
+  });
+  check('R9: create contact accepts kashrutBodyId + role', r9Contact.status === 201 && r9Contact.body.kashrutBodyId === bodyLandau.id && r9Contact.body.role === 'משגיח', r9Contact.body);
+
+  const r9ContactPatch = await api('PATCH', `/api/contacts/${r9Contact.body.id}`, { kashrutBodyId: bodySecond.id, role: 'מזכירות' });
+  check('R9: PATCH reassigns the contact to a different body + role', r9ContactPatch.status === 200 && r9ContactPatch.body.kashrutBodyId === bodySecond.id && r9ContactPatch.body.role === 'מזכירות', r9ContactPatch.body);
+
+  const r9ContactNoChannel = await api('PATCH', `/api/contacts/${r9Contact.body.id}`, { email: '', phone: '' });
+  check('R9: PATCH rejects clearing both email and phone (400)', r9ContactNoChannel.status === 400);
+
+  const r9BodyPatch = await api('PATCH', `/api/kashrut-bodies/${bodySecond.id}`, {
+    shortName: 'TEST-קצר', active: true, handlesPassover: true, sortOrder: 7, defaultContactId: r9Contact.body.id,
+  });
+  check('R9: admin PATCH updates all 5 body settings fields', r9BodyPatch.status === 200
+    && r9BodyPatch.body.shortName === 'TEST-קצר' && r9BodyPatch.body.handlesPassover === true
+    && r9BodyPatch.body.sortOrder === 7 && r9BodyPatch.body.defaultContactId === r9Contact.body.id, r9BodyPatch.body);
+
+  const r9BodiesList = await api('GET', '/api/kashrut-bodies');
+  const r9BodyInList = r9BodiesList.body.find(b => b.id === bodySecond.id);
+  check('R9: GET /api/kashrut-bodies now exposes defaultContactId', r9BodyInList && r9BodyInList.defaultContactId === r9Contact.body.id, r9BodyInList);
+
+  const r9BodyPatchNonAdmin = await fetch(`${BASE}/api/kashrut-bodies/${bodySecond.id}`, {
+    method: 'PATCH', headers: { ...assistantOnlyHeader, 'Content-Type': 'application/json' }, body: JSON.stringify({ sortOrder: 99 }),
+  });
+  // requireAuth (used here, same as R11's import routes) only ever looks
+  // at a real Bearer token -- the assistant-code-only header has none, so
+  // it's rejected at the requireAuth stage itself (401), never even
+  // reaching the requireAdmin check (which would be 403).
+  check('R9: bodies settings PATCH is admin-only (401 for assistant-code-only auth, rejected before reaching the admin check)', r9BodyPatchNonAdmin.status === 401);
+
+  // revert the body's settings change and clean up
+  await prisma.kashrutBody.update({ where: { id: bodySecond.id }, data: { shortName: null, sortOrder: 100, handlesPassover: bodySecond.handlesPassover, defaultContactId: null } });
+  await prisma.contact.delete({ where: { id: r9Contact.body.id } });
+
   // ── cleanup ──
   // capture R2 keys before deleting the Document rows, so the objects
   // themselves can be removed too, not just the DB rows

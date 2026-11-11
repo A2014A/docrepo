@@ -195,6 +195,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openGoodsReceiptsImport()">📦 קליטת דוחות קבלה</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openDashboard()">🏠 לוח טיפול</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openTrashScreen()">🗑 פח</button>
+      <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openContactsBodiesSettings()">👥 אנשי קשר וגופי כשרות</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openChangePass()">שינוי סיסמה</button>
       <button class="btn btn-outline" style="width:100%;padding:8px;margin-top:8px" onclick="openRoleCodes()">🔑 ניהול קודי גישה</button>
       <button class="btn btn-outline" id="unlinkedToggleBtn" style="width:100%;padding:8px;margin-top:8px" onclick="toggleUnlinkedFilter()">🔗 מסמכים לא מקושרים למקט</button>
@@ -223,6 +224,7 @@ header{background:var(--accent);color:#fff;padding:0 2rem;height:64px;display:fl
 <div id="goodsReceiptsImportPage" style="display:none"></div>
 <div id="dashboardPage" style="display:none"></div>
 <div id="trashPage" style="display:none"></div>
+<div id="cbsPage" style="display:none"></div>
 
 <!-- UPLOAD MODAL -->
 <div class="modal-bg" id="uploadModal">
@@ -3062,6 +3064,7 @@ if ('serviceWorker' in navigator) {
 <script src="/goods-receipts-import.js"></script>
 <script src="/dashboard.js"></script>
 <script src="/trash-screen.js"></script>
+<script src="/contacts-bodies-settings.js"></script>
 <script src="/sku-raw-materials-tab.js"></script>
 </body>
 </html>

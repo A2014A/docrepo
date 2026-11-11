@@ -800,13 +800,39 @@ app.get('/api/contacts', requireAssistant, ah(async (req, res) => {
 }));
 
 app.post('/api/contacts', requireAssistant, ah(async (req, res) => {
-  const { name, email, phone } = req.body;
+  const { name, email, phone, kashrutBodyId, role } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'נא להזין שם' });
   if (!email && !phone) return res.status(400).json({ error: 'נא להזין מייל או טלפון' });
   const contact = await prisma.contact.create({
-    data: { name: name.trim(), email: email || null, phone: phone || null },
+    data: {
+      name: name.trim(), email: email || null, phone: phone || null,
+      kashrutBodyId: kashrutBodyId ? parseInt(kashrutBodyId) : null, role: role || null,
+    },
   });
   res.status(201).json(contact);
+}));
+
+// R9 (docrepo-phase4-v2-tracks.md, added 11.11.2026): edit an existing
+// contact -- including assigning/reassigning it to a body. Deliberately
+// no delete button anywhere in the R9 UI ("do not delete existing
+// contacts"); the pre-existing DELETE route below is untouched but has no
+// caller in this screen.
+app.patch('/api/contacts/:id', requireAssistant, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const contact = await prisma.contact.findUnique({ where: { id } });
+  if (!contact) return res.status(404).json({ error: 'איש קשר לא נמצא' });
+  const { name, email, phone, kashrutBodyId, role } = req.body;
+  const updates = {};
+  if (name !== undefined) { if (!name.trim()) return res.status(400).json({ error: 'נא להזין שם' }); updates.name = name.trim(); }
+  if (email !== undefined) updates.email = email || null;
+  if (phone !== undefined) updates.phone = phone || null;
+  if (kashrutBodyId !== undefined) updates.kashrutBodyId = kashrutBodyId ? parseInt(kashrutBodyId) : null;
+  if (role !== undefined) updates.role = role || null;
+  const finalEmail = updates.email !== undefined ? updates.email : contact.email;
+  const finalPhone = updates.phone !== undefined ? updates.phone : contact.phone;
+  if (!finalEmail && !finalPhone) return res.status(400).json({ error: 'נא להשאיר מייל או טלפון אחד לפחות' });
+  const updated = await prisma.contact.update({ where: { id }, data: updates });
+  res.json(updated);
 }));
 
 app.delete('/api/contacts/:id', requireAssistant, ah(async (req, res) => {
@@ -853,6 +879,7 @@ function kashrutBodyOut(b) {
   return {
     id: b.id, name: b.name, shortName: b.shortName || '', active: b.active,
     handlesPassover: b.handlesPassover, sortOrder: b.sortOrder,
+    defaultContactId: b.defaultContactId, // R9, added 11.11.2026
   };
 }
 
@@ -2061,6 +2088,23 @@ app.get('/api/raw-materials/:id/skus', requireAssistant, ah(async (req, res) => 
 app.get('/api/kashrut-bodies', requireAssistant, ah(async (req, res) => {
   const bodies = await prisma.kashrutBody.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
   res.json(bodies.map(kashrutBodyOut));
+}));
+
+// R9: "Bodies settings, admin only" -- edits only (the bodies are already
+// seeded; this never creates or deletes one).
+app.patch('/api/kashrut-bodies/:id', requireAuth, requireAdmin, ah(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const body = await prisma.kashrutBody.findUnique({ where: { id } });
+  if (!body) return res.status(404).json({ error: 'גוף כשרות לא נמצא' });
+  const { shortName, active, handlesPassover, sortOrder, defaultContactId } = req.body;
+  const updates = {};
+  if (shortName !== undefined) updates.shortName = shortName || null;
+  if (active !== undefined) updates.active = !!active;
+  if (handlesPassover !== undefined) updates.handlesPassover = !!handlesPassover;
+  if (sortOrder !== undefined) updates.sortOrder = parseInt(sortOrder) || 0;
+  if (defaultContactId !== undefined) updates.defaultContactId = defaultContactId ? parseInt(defaultContactId) : null;
+  const updated = await prisma.kashrutBody.update({ where: { id }, data: updates });
+  res.json(kashrutBodyOut(updated));
 }));
 
 /* ── read-only export for the kosher dashboard, API-key protected (not JWT/
