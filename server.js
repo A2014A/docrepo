@@ -46,6 +46,29 @@ async function ensureDefaults() {
 }
 ensureDefaults().catch(e => console.error('startup defaults failed', e));
 
+// S5 go-live checklist item, added 11.11.2026: warn loudly on every
+// startup if any user still has a known default password -- never prints
+// the password itself, only the email/role and which default it matched.
+const DEFAULT_PASSWORDS = ['1234', 'admin', 'password'];
+async function warnIfDefaultPasswords() {
+  const users = await prisma.user.findMany();
+  const withDefault = users.filter(u => DEFAULT_PASSWORDS.some(p => bcrypt.compareSync(p, u.passwordHash)));
+  if (withDefault.length) {
+    console.log('\n⚠️  אזהרת אבטחה: למשתמשים הבאים סיסמת ברירת מחדל -- יש לשנות לפני העלייה לאוויר:');
+    for (const u of withDefault) console.log(`   - ${u.email} (${u.role})`);
+    console.log('');
+  }
+}
+warnIfDefaultPasswords().catch(e => console.error('default-password check failed', e));
+
+// Same category of risk, found while preparing the S5 checklist: JWT_SECRET
+// falls back to a fixed string committed in this very file if the env var
+// isn't set -- anyone who can read the source (now in git) could forge a
+// valid admin token. Never prints the actual value either way.
+if (!process.env.JWT_SECRET) {
+  console.log('\n⚠️  אזהרת אבטחה: JWT_SECRET לא מוגדר בסביבה -- המערכת משתמשת כרגע במפתח קבוע מתוך קוד המקור. יש להגדיר JWT_SECRET לפני העלייה לאוויר.\n');
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
