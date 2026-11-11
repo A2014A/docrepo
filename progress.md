@@ -1097,12 +1097,35 @@ recipient address -- accepted, zero rejections, nothing sent to any
 kashrut body or other contact. 175/175 regression assertions re-run
 clean after the restart.
 
+### xlsx -> exceljs migration, upload-parsing half (done) (`5873fec`)
+Listed every place that parses an uploaded spreadsheet: only
+`/api/skus/import` and `/api/skus/import-report` still used `xlsx`
+directly -- raw-material registry import (R11) already used `exceljs`,
+and sku-master-import / goods-receipts-import are a hand-rolled CSV
+parser with no Excel library at all. Migrated both to `exceljs`.
+Since `exceljs` can't read the old binary `.xls` format, both now
+reject `.xls` up front with a 400 + a clear Hebrew message (open in
+Excel, save as `.xlsx`) instead of silently handing it to a tolerant
+parser; removed `.xls` from the one relevant file input's `accept`.
+`/api/skus/import` is now admin-only (`requireAdmin`) and its tab
+button is hidden in the UI -- the S1 master-import flow (with its diff
+preview) is what the UI calls now; the old route stays for any script
+still calling it directly. New `prisma/test-sku-import-exceljs.js` (13
+checks, builds `.xlsx` fixtures in-memory via exceljs itself). All 175
+prior assertions re-run clean -- 188 total.
+
+**Deliberately left for a later step**: xlsx's *write* (export) uses --
+`server.js`'s dashboard-card export, `public/index.html`'s client-side
+"דוח מקטים" export, and two one-off diagnostic scripts
+(`prisma/sku-master-import-report.js`, `prisma/export-l1-review.js`).
+The `xlsx` package itself is not yet removed from `package.json` --
+these still depend on it.
+
 ### Follow-up (not done, deliberately deferred)
-1. **Move Excel parsing off `xlsx`** -- `xlsx` has two high-severity
-   findings with **no fix available at all** (prototype pollution +
-   ReDoS). `exceljs` is already a direct dependency used elsewhere in
-   this app; the long-term fix is to migrate whatever still uses `xlsx`
-   for parsing onto `exceljs` instead, then drop the `xlsx` dependency.
+1. **Finish the `xlsx` -> `exceljs` migration** -- migrate the four
+   write/export uses listed above onto `exceljs`, then drop the `xlsx`
+   dependency entirely (resolves its two high-severity findings, which
+   have no fix available otherwise).
 2. **prisma 6 -> 7 upgrade** -- needed to resolve the `deepmerge-ts`
    high-severity finding (via `@prisma/config`), but `npm audit fix
    --force` reported it as a breaking change. Needs its own dedicated
