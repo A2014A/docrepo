@@ -425,16 +425,33 @@ app.delete('/api/skus/:id', requireAuth, requireAdmin, ah(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.post('/api/skus/import', requireAuth, upload.single('file'), ah(async (req, res) => {
+// xlsx -> exceljs migration (11.11.2026): exceljs can't read the old binary
+// .xls format, so both spreadsheet-upload endpoints below now reject it
+// up front with this message instead of letting XLSX.read silently handle
+// it (which is what the old xlsx-based code did).
+const XLS_NOT_SUPPORTED_MSG = 'קובצי XLS הישנים אינם נתמכים יותר. פתחו את הקובץ באקסל ושמרו כ-XLSX (קובץ ← שמור בשם ← Excel Workbook‎ .xlsx), ואז העלו אותו.';
+
+// Admin-only, kept for compatibility -- the S1 master-import flow
+// (/api/sku-master-import/preview+apply, with its diff preview) is what the
+// UI now calls; this older positional-column import has no UI button
+// anymore but the route itself is unchanged so any existing script/habit
+// still using it keeps working.
+app.post('/api/skus/import', requireAuth, requireAdmin, upload.single('file'), ah(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  const ext = path.extname(req.file.originalname).replace('.', '').toLowerCase();
+  if (ext === 'xls') return res.status(400).json({ error: XLS_NOT_SUPPORTED_MSG });
   try {
-    const XLSX = require('xlsx');
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(req.file.buffer);
+    const ws = wb.worksheets[0];
+    const rows = [];
+    ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+      rows[rowNumber - 1] = row.values.slice(1).map(v => regImportCellToString(v));
+    });
     let added = 0, updated = 0;
     for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
+      const row = rows[i] || [];
       const id           = row[0] ? String(row[0]).trim() : '';
       const name         = row[1] ? String(row[1]).trim() : '';
       const tipusRaw     = row[2] ? String(row[2]).trim() : '';
@@ -487,9 +504,16 @@ app.get('/api/skus/:id/docs', requireAssistant, ah(async (req, res) => {
  * notes and anything edited by hand are never overwritten. */
 app.post('/api/skus/import-report', requireAssistant, upload.single('file'), ah(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
-  const XLSX = require('xlsx');
-  const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+  const ext = path.extname(req.file.originalname).replace('.', '').toLowerCase();
+  if (ext === 'xls') return res.status(400).json({ error: XLS_NOT_SUPPORTED_MSG });
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(req.file.buffer);
+  const ws = wb.worksheets[0];
+  const rows = [];
+  ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    rows[rowNumber - 1] = row.values.slice(1).map(v => regImportCellToString(v));
+  });
   const header = (rows[0] || []).map(h => String(h || '').trim());
   const col = (...names) => header.findIndex(h => names.includes(h));
   const iCode = col("מק'ט", 'מק"ט', 'מקט');
@@ -499,11 +523,12 @@ app.post('/api/skus/import-report', requireAssistant, upload.single('file'), ah(
 
   const seen = new Map(); // code -> { name, supplier }
   for (let i = 1; i < rows.length; i++) {
-    const code = String(rows[i][iCode] ?? '').trim();
+    const row = rows[i] || [];
+    const code = String(row[iCode] ?? '').trim();
     if (!code || seen.has(code)) continue;
     seen.set(code, {
-      name: String(rows[i][iName] ?? '').trim(),
-      supplier: iSupplier >= 0 ? String(rows[i][iSupplier] ?? '').trim() : '',
+      name: String(row[iName] ?? '').trim(),
+      supplier: iSupplier >= 0 ? String(row[iSupplier] ?? '').trim() : '',
     });
   }
 

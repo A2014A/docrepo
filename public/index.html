@@ -1052,7 +1052,10 @@ initAuth();loadStats();loadTags();loadDocs();
     <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border2);padding-bottom:10px;flex-wrap:wrap">
       <button class="btn btn-accent"  id="skuTabList"   onclick="skuTab('list')">רשימת מקטים</button>
       <button class="btn btn-outline" id="skuTabAdd"    onclick="skuTab('add')">+ הוספה ידנית</button>
-      <button class="btn btn-outline" id="skuTabImport" onclick="skuTab('import')">📥 ייבוא מ-Excel</button>
+      <!-- hidden 11.11.2026: superseded by the S1 master-import flow (📥 ייבוא מאסטר מקטים,
+           sku-master-import.js) which has a diff preview before applying. Route (/api/skus/import)
+           stays, admin-only, for any existing script/habit still calling it directly. -->
+      <button class="btn btn-outline" id="skuTabImport" onclick="skuTab('import')" style="display:none">📥 ייבוא מ-Excel</button>
       <button class="btn btn-outline" id="skuTabReport" onclick="skuTab('report')">📊 דוח מסמכים</button>
     </div>
 
@@ -1154,7 +1157,7 @@ initAuth();loadStats();loadTags();loadDocs();
     <div id="skuPaneImport" style="display:none">
       <div id="skuImportAlert"></div>
       <p style="font-size:.9rem;color:var(--ink2);margin-bottom:16px">העלה קובץ Excel עם העמודות: מקט, תאור מוצר, טיפוס, מקור, איש רכש, ספק 2, ספק 1, כשרות, פסח, הערות, סוג תעודה.<br/>עמודת סוג תעודה (עמודה 11): "תעודה שנתית" / "תעודה לפי יצור" / "לימות השנה שנתי, לפסח לפי יצור" — תא ריק לא מוחק ערך קיים.<br/>מקטים קיימים יתעדכנו, חדשים יתווספו.</p>
-      <input type="file" id="skuImportFile" accept=".xlsx,.xls" class="form-input" style="margin-bottom:12px"/>
+      <input type="file" id="skuImportFile" accept=".xlsx" class="form-input" style="margin-bottom:12px"/>
       <button class="btn btn-accent" onclick="importSkuFile()">ייבא קובץ</button>
     </div>
 
