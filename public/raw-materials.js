@@ -112,6 +112,9 @@ function rmInjectStyles() {
 .rm-import-badge.EXISTING{background:#fef9c3;color:#854d0e;}
 .rm-import-badge.ERROR{background:#fee2e2;color:#991b1b;}
 .rm-import-counts{display:flex;gap:14px;margin-bottom:10px;font-size:.85rem;}
+.rm-new-photo-preview{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+.rm-new-photo-chip{display:flex;align-items:center;gap:6px;background:var(--bg2);border-radius:8px;padding:4px 8px;font-size:.78rem;}
+.rm-new-photo-chip button{background:none;border:none;cursor:pointer;color:#dc2626;font-size:.9rem;}
 `;
   document.head.appendChild(style);
 }
@@ -130,6 +133,7 @@ function rmBuildPageShell() {
       </div>
       <button class="btn btn-outline" onclick="rmExportExcel()">📥 ייצוא לאקסל</button>
       ${rmIsReadOnly() ? '' : `<button class="btn btn-outline" onclick="rmOpenImport()">📤 ייבוא מאקסל</button>`}
+      ${rmIsReadOnly() ? '' : `<button class="btn btn-accent" onclick="rmOpenNewMaterial()">+ חומר גלם חדש</button>`}
     </div>
     <div class="rm-summary" id="rmSummary"></div>
     <div class="rm-color-key" id="rmColorKey"></div>
@@ -782,6 +786,177 @@ async function rmRestoreMaterial(id) {
     showToast('חומר הגלם שוחזר מהארכיון');
     await rmLoad();
   } catch (e) { showToast(e.message); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * R7: add a new raw material. Keeps the legacy flow's shape (photo
+ * capture, attachments, SKU picker) inside the new registry: "🤖 זהה
+ * מהתווית" only ever fills the form's own editable fields -- nothing is
+ * saved until the user reviews/edits them and clicks "שמור".
+ * ══════════════════════════════════════════════════════════════════════ */
+let RM_NEW_FILES = [];
+let RM_NEW_SELECTED_SKUS = [];
+
+function rmNewInjectModal() {
+  if (document.getElementById('rmNewModal')) return;
+  const div = document.createElement('div');
+  div.className = 'modal-bg';
+  div.id = 'rmNewModal';
+  div.innerHTML = `
+    <div class="modal" style="max-width:560px">
+      <div class="modal-header">
+        <div class="modal-title">+ חומר גלם חדש</div>
+        <button class="modal-close" onclick="document.getElementById('rmNewModal').classList.remove('open')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="rmNewBody" style="max-height:70vh;overflow-y:auto"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('rmNewModal').classList.remove('open')">ביטול</button>
+        <button class="btn btn-accent" id="rmNewSaveBtn" onclick="rmNewSave()">שמור</button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+}
+
+function rmOpenNewMaterial() {
+  rmNewInjectModal();
+  RM_NEW_FILES = [];
+  RM_NEW_SELECTED_SKUS = [];
+  document.getElementById('rmNewModal').classList.add('open');
+  rmNewRender();
+}
+
+function rmNewOnPhotoChosen(input) {
+  for (const f of input.files) RM_NEW_FILES.push(f);
+  input.value = '';
+  rmNewRender();
+}
+function rmNewRemoveFile(idx) {
+  RM_NEW_FILES.splice(idx, 1);
+  rmNewRender();
+}
+function rmNewOnSkuPicked(chosen) {
+  RM_NEW_SELECTED_SKUS = chosen;
+  rmNewRender();
+}
+
+async function rmNewIdentifyFromLabel() {
+  const imageFile = RM_NEW_FILES.find(f => /\.(jpg|jpeg|png|webp|gif|pdf)$/i.test(f.name));
+  if (!imageFile) { showToast('צלם או בחר תמונה/PDF של התווית לפני הזיהוי'); return; }
+  const status = document.getElementById('rmNewIdentifyStatus');
+  status.textContent = '⏳ מזהה...';
+  try {
+    const fd = new FormData();
+    fd.append('file', imageFile);
+    const res = await fetch(API + '/api/raw-material-registry/identify-label', { method: 'POST', headers: authHeaders(), body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'שגיאה בזיהוי');
+    // fills the form's own editable fields only -- nothing is saved here;
+    // the user still reviews/edits/confirms every value before "שמור".
+    if (data.name) document.getElementById('rmNewName').value = data.name;
+    if (data.manufacturer) document.getElementById('rmNewManufacturer').value = data.manufacturer;
+    if (data.supplier) document.getElementById('rmNewSupplier').value = data.supplier;
+    if (data.originKashrutText) document.getElementById('rmNewOriginKashrutText').value = data.originKashrutText;
+    if (data.allergens) document.getElementById('rmNewAllergens').value = data.allergens;
+    status.textContent = '✓ זוהה -- בדוק ואשר את השדות לפני השמירה';
+    status.style.color = '#059669';
+  } catch (e) {
+    status.textContent = '⚠ שגיאה: ' + e.message;
+    status.style.color = '#dc2626';
+  }
+}
+
+function rmNewRender() {
+  const el = document.getElementById('rmNewBody');
+  // preserve already-typed values across re-renders (adding/removing a
+  // photo or picking a SKU re-renders the whole body)
+  const get = (id) => { const e = document.getElementById(id); return e ? e.value : ''; };
+  const vals = {
+    name: get('rmNewName'), supplier: get('rmNewSupplier'), manufacturer: get('rmNewManufacturer'),
+    originKashrutText: get('rmNewOriginKashrutText'), allergens: get('rmNewAllergens'), notes: get('rmNewNotes'),
+  };
+  el.innerHTML = `
+    <div class="form-group">
+      <label class="form-label">תמונות / קבצים</label>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-outline" style="flex:1" onclick="document.getElementById('rmNewPhotoCapture').click()">📷 צלם תווית</button>
+        <button type="button" class="btn btn-outline" style="flex:1" onclick="document.getElementById('rmNewPhotoFile').click()">📎 בחר קבצים</button>
+      </div>
+      <input type="file" id="rmNewPhotoCapture" accept="image/*" capture="environment" style="display:none" onchange="rmNewOnPhotoChosen(this)"/>
+      <input type="file" id="rmNewPhotoFile" accept="image/*,.pdf" multiple style="display:none" onchange="rmNewOnPhotoChosen(this)"/>
+      <div class="rm-new-photo-preview">
+        ${RM_NEW_FILES.map((f, i) => `<span class="rm-new-photo-chip">${rmEscapeHtml(f.name)}<button onclick="rmNewRemoveFile(${i})">✕</button></span>`).join('')}
+      </div>
+      <div style="margin-top:8px">
+        <button type="button" class="btn btn-outline" onclick="rmNewIdentifyFromLabel()">🤖 זהה מהתווית</button>
+        <span id="rmNewIdentifyStatus" style="font-size:.78rem;margin-right:8px"></span>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">שם (חובה)</label>
+      <input class="form-input" id="rmNewName" value="${rmEscapeHtml(vals.name)}"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">ספק</label>
+      <input class="form-input" id="rmNewSupplier" value="${rmEscapeHtml(vals.supplier)}"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">יצרן</label>
+      <input class="form-input" id="rmNewManufacturer" value="${rmEscapeHtml(vals.manufacturer)}"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">כשרות מקור (הכשר כפי שמופיע על התווית)</label>
+      <input class="form-input" id="rmNewOriginKashrutText" value="${rmEscapeHtml(vals.originKashrutText)}"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">אלרגנים</label>
+      <input class="form-input" id="rmNewAllergens" value="${rmEscapeHtml(vals.allergens)}"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">הערות</label>
+      <textarea class="form-input" id="rmNewNotes" rows="2">${rmEscapeHtml(vals.notes)}</textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">מק"ט מקושר</label>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button type="button" class="btn btn-outline" onclick="openSkuPicker('rmNew')">בחר מק"ט</button>
+        <span style="font-size:.82rem;color:var(--ink2)">${RM_NEW_SELECTED_SKUS.length ? RM_NEW_SELECTED_SKUS.map(s => rmEscapeHtml(s.id + ' - ' + s.name)).join(', ') : 'לא נבחר'}</span>
+      </div>
+    </div>`;
+}
+
+async function rmNewSave() {
+  const name = document.getElementById('rmNewName').value.trim();
+  if (!name) { showToast('נא להזין שם'); return; }
+  const btn = document.getElementById('rmNewSaveBtn');
+  btn.disabled = true;
+  try {
+    const created = await apiFetch('/api/raw-material-registry', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        supplier: document.getElementById('rmNewSupplier').value.trim(),
+        manufacturer: document.getElementById('rmNewManufacturer').value.trim(),
+        originKashrutText: document.getElementById('rmNewOriginKashrutText').value.trim(),
+        allergens: document.getElementById('rmNewAllergens').value.trim(),
+        notes: document.getElementById('rmNewNotes').value.trim(),
+      }),
+    });
+    for (const file of RM_NEW_FILES) {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('docRole', 'LABEL');
+      await fetch(API + '/api/raw-material-registry/' + created.id + '/documents', { method: 'POST', headers: authHeaders(), body: fd });
+    }
+    for (const sku of RM_NEW_SELECTED_SKUS) {
+      await apiFetch('/api/raw-material-registry/' + created.id + '/skus', { method: 'POST', body: JSON.stringify({ skuCode: sku.id }) });
+    }
+    showToast('חומר הגלם נשמר');
+    document.getElementById('rmNewModal').classList.remove('open');
+    await rmLoad();
+  } catch (e) { showToast(e.message); }
+  btn.disabled = false;
 }
 
 // R12: "select all filtered" + the bulk-send entry point. Hidden entirely

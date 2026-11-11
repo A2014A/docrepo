@@ -456,6 +456,30 @@ async function snapshot() {
 
   await prisma.rawMaterial.delete({ where: { id: archiveRm.id } });
 
+  // R7: add raw material (create now also accepts originKashrutText +
+  // allergens directly) and "🤖 זהה מהתווית" validation. The real Claude
+  // call itself was verified manually against an existing label photo
+  // (Document 984) rather than in this permanent suite, to avoid a
+  // recurring API call/cost on every regression run -- same precedent as
+  // the pre-existing /api/identify, which also isn't exercised here.
+  const r7Create = await api('POST', '/api/raw-material-registry', {
+    name: 'TEST-R7-new', supplier: 'TEST-SUP', manufacturer: 'TEST-MFR',
+    originKashrutText: 'TEST-OU', allergens: 'TEST-מכיל גלוטן',
+  });
+  check('R7: create accepts originKashrutText + allergens directly', r7Create.status === 201 && r7Create.body.originKashrutText === 'TEST-OU' && r7Create.body.allergens === 'TEST-מכיל גלוטן', r7Create.body);
+
+  const r7Patch = await api('PATCH', `/api/raw-material-registry/${r7Create.body.id}`, { allergens: 'TEST-מכיל אגוזים' });
+  check('R7: PATCH updates allergens', r7Patch.status === 200 && r7Patch.body.allergens === 'TEST-מכיל אגוזים', r7Patch.body);
+
+  const r7NoFile = await fetch(`${BASE}/api/raw-material-registry/identify-label`, { method: 'POST', headers: AUTH_HEADER, body: new FormData() });
+  check('R7: identify-label without a file is rejected (400)', r7NoFile.status === 400);
+  const fdBadExt = new FormData();
+  fdBadExt.append('file', new Blob([Buffer.from('TEST')], { type: 'text/plain' }), 'test.txt');
+  const r7BadExt = await fetch(`${BASE}/api/raw-material-registry/identify-label`, { method: 'POST', headers: AUTH_HEADER, body: fdBadExt });
+  check('R7: identify-label rejects an unsupported file type (400)', r7BadExt.status === 400);
+
+  await prisma.rawMaterial.delete({ where: { id: r7Create.body.id } });
+
   // ── cleanup ──
   // capture R2 keys before deleting the Document rows, so the objects
   // themselves can be removed too, not just the DB rows

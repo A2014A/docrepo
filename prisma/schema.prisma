@@ -410,6 +410,11 @@ model RawMaterial {
   archived       Boolean @default(false)
   archivedReason String?
 
+  // R7 (docrepo-phase4-v2-tracks.md, added 10.11.2026, additive):
+  // "🤖 זהה מהתווית" suggests this from the label photo; always confirmed/
+  // editable by the user before saving, never auto-filled silently.
+  allergens String?
+
   documents RawMaterialDocument[]
   approvals RawMaterialApproval[]
   skus      SkuRawMaterial[]

@@ -934,6 +934,7 @@ function regMaterialOut(rm, extra) {
     originPassoverCertDocId: rm.originPassoverCertDocId, originPassoverValidUntil: rm.originPassoverValidUntil,
     supplierItemCode: rm.supplierItemCode || '', importId: rm.importId,
     archived: rm.archived, archivedReason: rm.archivedReason || '',
+    allergens: rm.allergens || '',
     createdAt: rm.createdAt, updatedAt: rm.updatedAt,
     documents: documents.map(regDocOut),
     approvals: approvals.map(regApprovalOut),
@@ -962,12 +963,68 @@ app.get('/api/raw-material-registry', requireAssistant, ah(async (req, res) => {
 }));
 
 app.post('/api/raw-material-registry', requireAssistant, ah(async (req, res) => {
-  const { name, supplier, manufacturer, notes } = req.body;
+  const { name, supplier, manufacturer, notes, originKashrutText, allergens } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'נא להזין שם' });
   const rm = await prisma.rawMaterial.create({
-    data: { name: name.trim(), supplier: supplier || null, manufacturer: manufacturer || null, notes: notes || null },
+    data: {
+      name: name.trim(), supplier: supplier || null, manufacturer: manufacturer || null, notes: notes || null,
+      // R7: the user may already have confirmed these from "🤖 זהה מהתווית"
+      // before the first save, so the add-material flow can set them in
+      // the same call instead of a separate PATCH.
+      originKashrutText: originKashrutText || null, allergens: allergens || null,
+    },
   });
   res.status(201).json(regMaterialOut(rm));
+}));
+
+/* ── R7: "🤖 זהה מהתווית" -- suggests name/manufacturer/supplier/origin
+ * hechsher text/allergens from a label photo. Returns suggestions only;
+ * never writes anything -- every field must be confirmed (and is freely
+ * editable) by the user before the actual save. Unlike the older
+ * /api/identify, this picks the real media_type from the file extension
+ * instead of hardcoding application/pdf, since labels are usually photos. ── */
+app.post('/api/raw-material-registry/identify-label', requireAssistant, upload.single('file'), ah(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY לא מוגדר' });
+  const ext = path.extname(req.file.originalname).replace('.', '').toLowerCase();
+  const mediaTypeByExt = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+  const mediaType = mediaTypeByExt[ext];
+  if (!mediaType) return res.status(400).json({ error: 'סוג קובץ לא נתמך לזיהוי (jpg/png/webp/gif/pdf)' });
+  try {
+    const fileData = req.file.buffer.toString('base64');
+    const prompt = `אתה מסייע לזיהוי תוויות של חומרי גלם לחברת מזון ישראלית.
+קרא את התווית המצורפת וענה בדיוק בפורמט JSON הבא, ללא הסברים נוספים:
+{
+  "name": "שם המוצר כפי שמופיע על התווית, או null",
+  "manufacturer": "שם היצרן כפי שמופיע על התווית, או null",
+  "supplier": "שם הספק אם מופיע בנפרד מהיצרן, או null",
+  "originKashrutText": "סימון הכשרות כפי שמופיע על התווית (למשל OU, OK, בד\\"ץ עדה חרדית), או null",
+  "allergens": "רשימת האלרגנים כפי שמופיעה על התווית (למשל: מכיל גלוטן, אגוזים, חלב), או null"
+}
+אם שדה לא מופיע או לא ניתן לקרוא אותו בבירור -- החזר null עבורו, אל תמציא.`;
+    const contentBlock = ext === 'pdf'
+      ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: fileData } }
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileData } };
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 512,
+        messages: [{ role: 'user', content: [contentBlock, { type: 'text', text: prompt }] }],
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || 'שגיאת API');
+    const text = data.content[0].text.replace(/```json|```/g, '').trim();
+    const result = JSON.parse(text);
+    res.json({
+      name: result.name || null, manufacturer: result.manufacturer || null, supplier: result.supplier || null,
+      originKashrutText: result.originKashrutText || null, allergens: result.allergens || null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 }));
 
 app.get('/api/raw-material-registry/:id', requireAssistant, ah(async (req, res) => {
@@ -979,7 +1036,7 @@ app.get('/api/raw-material-registry/:id', requireAssistant, ah(async (req, res) 
 app.patch('/api/raw-material-registry/:id', requireAssistant, ah(async (req, res) => {
   const id = parseInt(req.params.id);
   const {
-    name, supplier, manufacturer, notes, defaultDocId,
+    name, supplier, manufacturer, notes, defaultDocId, allergens,
     originKashrutText, originKashrutBodyId, originCertDocId, originCertValidUntil, originHasCert,
     originPassoverStatus, originPassoverText, originPassoverCertDocId, originPassoverValidUntil,
   } = req.body;
@@ -991,6 +1048,7 @@ app.patch('/api/raw-material-registry/:id', requireAssistant, ah(async (req, res
   if (supplier !== undefined) updates.supplier = supplier || null;
   if (manufacturer !== undefined) updates.manufacturer = manufacturer || null;
   if (notes !== undefined) updates.notes = notes || null;
+  if (allergens !== undefined) updates.allergens = allergens || null;
   if (defaultDocId !== undefined) updates.defaultDocId = defaultDocId ? parseInt(defaultDocId) : null;
   // כשרות המקור -- ימות השנה
   if (originKashrutText !== undefined) updates.originKashrutText = originKashrutText || null;

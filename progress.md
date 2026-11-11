@@ -908,6 +908,53 @@ default list, visible with includeArchived=1, excluded from a no-ids
 export, bulk-send rejects it by name, restore clears both fields and it
 reappears). **94/94 passing**, clean TEST- cleanup.
 
+## R7 — Add raw material (done)
+
+- **New "+ חומר גלם חדש" button** on the registry list (hidden in
+  read-only mode). There was no add-material UI in the *new* registry at
+  all before this -- only the legacy SkuLink-based screen had one. Kept
+  that flow's shape (photo capture, attachments, SKU picker) inside the
+  new registry rather than reviving the legacy screen.
+- **Schema (additive):** `RawMaterial.allergens String?` (backed up
+  first: `backups/2026-11-10T12-52-06-282Z`, clean push). `POST`/`PATCH
+  /api/raw-material-registry` now also accept `originKashrutText` +
+  `allergens` directly, so the add-material flow doesn't need a separate
+  PATCH right after create.
+- **"🤖 זהה מהתווית"** -- new `POST
+  /api/raw-material-registry/identify-label`: a Haiku call tailored to
+  raw-material labels (name, manufacturer, supplier, origin hechsher
+  text, allergens), picking the real `media_type` from the file's own
+  extension (jpg/png/webp/gif/pdf) instead of hardcoding
+  `application/pdf` the way the older `/api/identify` does. Every
+  suggested value lands in the form's own editable inputs only --
+  nothing is saved until the user reviews/edits/confirms and clicks
+  "שמור"; a field Claude couldn't read comes back `null` and is left
+  blank rather than invented.
+- **SKU picker reuse:** added a third mode (`'rmNew'`) to index.html's
+  existing global `openSkuPicker()`/`confirmSkuPicker()` -- 3 minimal,
+  targeted edits (an existing-selection lookup, a dispatch branch, a
+  toast-suppression check), matching exactly how the `'rmCard'` mode was
+  added before. No rewrite of that shared picker.
+- **Save**: creates the `RawMaterial` (with `originKashrutText`/
+  `allergens` already set), uploads each attached file via the existing
+  per-item documents endpoint (role `LABEL`), and links the picked SKU
+  via the existing skus endpoint -- three small calls to routes that
+  already existed, no new write endpoint needed for the save itself.
+
+Verified the real AI call end-to-end against an existing label photo
+already in the system (Document 984, "תויות 12096 — קווקר דק מורנינג שק
+ירוק"): correctly extracted name ("Bar Lakol Std 27 Oat Flakes") and
+manufacturer ("Richardson Milling (UK) Ltd"), correctly returned `null`
+(not invented) for the fields not visible on that particular label.
+
+Regression: `prisma/test-raw-material-registry-api.js` extended with 4
+checks (create accepts the two new fields, PATCH updates allergens,
+identify-label rejects a missing file and an unsupported file type). The
+real Claude call itself is intentionally **not** in the permanent suite
+(same precedent as the pre-existing `/api/identify`, also untested here)
+to avoid a recurring API cost/flakiness on every run -- verified manually
+instead, as above. **98/98 passing**, clean TEST- cleanup.
+
 ### Next
-R7 (add-material flow) → R8 (SKU tab) → R9 (contacts/bodies settings),
-stopping after each with a browser-checkable summary.
+R8 (SKU tab) → R9 (contacts/bodies settings), stopping after each with a
+browser-checkable summary.
