@@ -45,7 +45,15 @@ function repairStrayQuotes(text) {
   return out;
 }
 
-async function callHaiku(contentBlock) {
+const { isHaikuCapReached, recordHaikuUsage } = require('../lib/haiku-usage');
+
+// S5 fix (11.11.2026): prisma is required (not optional) -- this is the one
+// choke point for the L1 batch pipeline's Haiku usage, and the cap has to
+// see batch calls too or the admin screen's "month's usage" would be a lie.
+async function callHaiku(contentBlock, prisma) {
+  if (await isHaikuCapReached(prisma)) {
+    throw new Error('הגעת למכסת הטוקנים החודשית (IDENTIFY_MONTHLY_TOKEN_CAP) -- לא ניתן לשלוח בקשות Haiku נוספות החודש');
+  }
   const body = {
     model: MODEL,
     max_tokens: 4096,
@@ -57,6 +65,8 @@ async function callHaiku(contentBlock) {
   const response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error?.message || `HTTP ${response.status}`);
+  const usage = data.usage || {};
+  await recordHaikuUsage(prisma, usage.input_tokens, usage.output_tokens);
   const text = (data.content?.find(c => c.type === 'text')?.text || '').replace(/```json|```/g, '').trim();
   let parsed = {};
   try {
@@ -68,7 +78,7 @@ async function callHaiku(contentBlock) {
       throw new Error(`JSON parse failed (stop_reason=${data.stop_reason}, text length=${text.length}): ${text.slice(0, 1500)}`);
     }
   }
-  return { parsed, usage: data.usage || {} };
+  return { parsed, usage };
 }
 
 module.exports = { callHaiku, FIELD_INSTRUCTIONS, repairStrayQuotes, ANTHROPIC_API_KEY, MODEL };

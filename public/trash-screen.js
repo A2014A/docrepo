@@ -42,7 +42,7 @@ async function trashLoad() {
         <tr style="border-bottom:1px solid #eee">
           <td style="padding:6px 8px">${jsAttr(d.name || d.title || ('מסמך #' + d.id))}</td>
           <td style="padding:6px 8px">${d.trashedAt ? new Date(d.trashedAt).toISOString().slice(0, 10) : ''}</td>
-          <td style="padding:6px 8px"><button class="btn btn-outline" onclick="trashRestore(${d.id})">↩ שחזר</button></td>
+          <td style="padding:6px 8px">${isReadOnlyMode() ? '' : `<button class="btn btn-outline" onclick="trashRestore(${d.id})">↩ שחזר</button>`}</td>
         </tr>`).join('')}</tbody></table>`;
   } catch (e) {
     el.innerHTML = `<p style="color:#c0612f">שגיאה: ${jsAttr(e.message)}</p>`;

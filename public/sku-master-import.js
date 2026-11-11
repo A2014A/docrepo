@@ -141,7 +141,7 @@ function smiRenderResults() {
   html += '</div>';
 
   html += `<div class="smi-apply-bar">
-    <button class="btn btn-accent" onclick="smiApplyStub()">✔ ייבא את הנבחרים</button>
+    ${isReadOnlyMode() ? '' : `<button class="btn btn-accent" onclick="smiApplyStub()">✔ ייבא את הנבחרים</button>`}
     <span class="smi-hint">שום דבר לא ייכתב למסד הנתונים לפני אישור מפורש</span>
   </div>`;
 

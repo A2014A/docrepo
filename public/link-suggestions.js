@@ -80,7 +80,7 @@ function lsBuildPageShell() {
         <input id="lsFilterManufacturer" placeholder="יצרן..." oninput="lsApplyFilters()"/>
         <input id="lsFilterDateFrom" type="date" onchange="lsApplyFilters()" title="הועלה מתאריך"/>
         <input id="lsFilterDateTo" type="date" onchange="lsApplyFilters()" title="הועלה עד תאריך"/>
-        <button class="btn btn-accent" style="margin-right:auto" onclick="lsBulkCertainClick()">✔ אשר את כל הוודאיים</button>
+        ${isReadOnlyMode() ? '' : `<button class="btn btn-accent" style="margin-right:auto" onclick="lsBulkCertainClick()">✔ אשר את כל הוודאיים</button>`}
       </div>
       <div id="lsList"></div>
     </div>`;
@@ -233,15 +233,15 @@ function lsRenderLeftPane() {
     ${lots ? `<div class="ls-field"><b>LOT:</b> ${jsAttr(lots)}</div>` : ''}
     <h4 style="margin:16px 0 8px">מק"טים מועמדים</h4>
     <div id="lsSkuCards"></div>
-    <button class="btn btn-outline" style="width:100%;margin-top:8px" onclick="lsOpenOtherSkuSearch()">🔍 חפש מק"ט אחר</button>
+    ${isReadOnlyMode() ? '' : `<button class="btn btn-outline" style="width:100%;margin-top:8px" onclick="lsOpenOtherSkuSearch()">🔍 חפש מק"ט אחר</button>`}
     <div class="ls-actions">
-      <button class="btn btn-accent" onclick="lsSubmitLink()" title="Enter">✔ קשר</button>
+      ${isReadOnlyMode() ? '' : `<button class="btn btn-accent" onclick="lsSubmitLink()" title="Enter">✔ קשר</button>`}
       <button class="btn btn-outline" onclick="lsSkip()" title="S">⏭ דלג</button>
-      <button class="btn btn-outline" onclick="lsOpenNoSkuPanel()" title="N">🚫 לא דורש מק"ט</button>
-      <button class="btn btn-outline" onclick="lsOpenDuplicatePanel()">כפילות של…</button>
+      ${isReadOnlyMode() ? '' : `<button class="btn btn-outline" onclick="lsOpenNoSkuPanel()" title="N">🚫 לא דורש מק"ט</button>
+      <button class="btn btn-outline" onclick="lsOpenDuplicatePanel()">כפילות של…</button>`}
     </div>
     <div id="lsExtraPanel"></div>
-    <div class="ls-hint">מקשים: Enter=קשר, S=דלג, N=לא דורש מק"ט, ←/→=הקודם/הבא</div>`;
+    <div class="ls-hint">מקשים: ${isReadOnlyMode() ? '' : 'Enter=קשר, '}S=דלג${isReadOnlyMode() ? '' : ', N=לא דורש מק"ט'}, ←/→=הקודם/הבא</div>`;
   lsRenderSkuCards();
 }
 
@@ -374,9 +374,9 @@ function lsKeyHandler(e) {
   if (!cardVisible) return;
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-  if (e.key === 'Enter') { e.preventDefault(); lsSubmitLink(); }
+  if (e.key === 'Enter') { if (!isReadOnlyMode()) { e.preventDefault(); lsSubmitLink(); } }
   else if (e.key === 's' || e.key === 'S') { lsSkip(); }
-  else if (e.key === 'n' || e.key === 'N') { lsOpenNoSkuPanel(); }
+  else if (e.key === 'n' || e.key === 'N') { if (!isReadOnlyMode()) lsOpenNoSkuPanel(); }
   else if (e.key === 'ArrowRight') { lsNext(); }
   else if (e.key === 'ArrowLeft') { lsPrev(); }
 }

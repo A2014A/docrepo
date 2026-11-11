@@ -8,6 +8,7 @@ const jwt      = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const nodemailer = require('nodemailer');
 const { uploadBuffer, getObjectStream } = require('./lib/r2');
+const { isHaikuCapReached, recordHaikuUsage, getMonthlyHaikuUsage, haikuCap } = require('./lib/haiku-usage');
 
 const prisma = new PrismaClient();
 
@@ -86,6 +87,46 @@ function r2KeyFor(originalname) {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// S5 (11.11.2026): demo mode (?demo=1 on the client) must be enforced
+// server-side, not just by hiding UI buttons -- a demo session sends
+// X-Demo-Mode: 1 on every request (authHeaders() in index.html adds it
+// automatically, so this is not something each screen has to opt into).
+// This single global middleware blocks every mutating request from a
+// demo session, across every route in the app, present or future --
+// deliberately not a per-route allowlist, since that would have to be
+// kept in sync by hand and could silently miss a new write route later.
+// The only exceptions are routes that are POST/PATCH but never actually
+// write to the DB (previews, dry-runs, AI-identify endpoints that only
+// return suggestions) -- login must also stay reachable in demo mode.
+const DEMO_EXEMPT_EXACT_PATHS = new Set([
+  '/api/auth/login',
+  '/api/raw-material-registry/import/parse',
+  '/api/raw-material-registry/import/preview',
+  '/api/raw-material-registry/export',
+  '/api/sku-master-import/preview',
+  '/api/goods-receipts/preview',
+  '/api/identify',
+  '/api/raw-material-registry/identify-label',
+]);
+function isDemoExemptRequest(req) {
+  if (DEMO_EXEMPT_EXACT_PATHS.has(req.path)) return true;
+  if (/^\/api\/identify-by-id\/\d+$/.test(req.path)) return true;
+  // this one writes by default, but supports an explicit dry-run query
+  // param -- only the dry-run form is exempt
+  if (req.path === '/api/skus/import-report' && req.query.dryRun === '1') return true;
+  return false;
+}
+function rejectIfDemoMode(req, res, next) {
+  const isDemo = req.headers['x-demo-mode'] === '1';
+  const isMutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+  if (isDemo && isMutating && !isDemoExemptRequest(req)) {
+    return res.status(403).json({ error: 'במצב הצגה – הפעולה מושבתת' });
+  }
+  next();
+}
+app.use(rejectIfDemoMode);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Express 4 does not catch rejected promises from async route handlers --
@@ -1041,6 +1082,7 @@ app.post('/api/raw-material-registry/identify-label', requireAssistant, upload.s
   const mediaTypeByExt = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
   const mediaType = mediaTypeByExt[ext];
   if (!mediaType) return res.status(400).json({ error: 'סוג קובץ לא נתמך לזיהוי (jpg/png/webp/gif/pdf)' });
+  if (await isHaikuCapReached(prisma)) return res.status(429).json({ error: 'הגעת למכסת הטוקנים החודשית' });
   try {
     const fileData = req.file.buffer.toString('base64');
     const prompt = `אתה מסייע לזיהוי תוויות של חומרי גלם לחברת מזון ישראלית.
@@ -1066,6 +1108,7 @@ app.post('/api/raw-material-registry/identify-label', requireAssistant, upload.s
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error?.message || 'שגיאת API');
+    await recordHaikuUsage(prisma, data.usage?.input_tokens, data.usage?.output_tokens);
     const text = data.content[0].text.replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
     res.json({
@@ -2169,6 +2212,19 @@ app.get('/api/role-code/check', ah(async (req, res) => {
   res.json({ ok: false });
 }));
 
+// S5 fix (11.11.2026): admin-visible monthly Haiku usage, backing the
+// IDENTIFY_MONTHLY_TOKEN_CAP display on the role-codes admin screen.
+app.get('/api/haiku-usage', requireAuth, requireAdmin, ah(async (req, res) => {
+  const usage = await getMonthlyHaikuUsage(prisma);
+  res.json({
+    yearMonth: usage.yearMonth,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    callCount: usage.callCount,
+    cap: haikuCap(),
+  });
+}));
+
 app.patch('/api/role-codes', requireAuth, requireAdmin, ah(async (req, res) => {
   const { assistant_code, viewer_code } = req.body;
   if (assistant_code !== undefined) await setSetting('assistant_code', assistant_code);
@@ -2222,6 +2278,7 @@ app.post('/api/identify-by-id/:id', requireAssistant, ah(async (req, res) => {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'מפתח API חסר' });
+    if (await isHaikuCapReached(prisma)) return res.status(429).json({ error: 'הגעת למכסת הטוקנים החודשית' });
 
     const { stream } = await getObjectStream(doc.fileUrl);
     const chunks = [];
@@ -2259,6 +2316,7 @@ app.post('/api/identify-by-id/:id', requireAssistant, ah(async (req, res) => {
     const response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error?.message || 'שגיאת API');
+    await recordHaikuUsage(prisma, data.usage?.input_tokens, data.usage?.output_tokens);
 
     let result = {};
     const text = data.content?.find(c => c.type === 'text')?.text || '';
@@ -2282,6 +2340,7 @@ app.post('/api/identify', requireAssistant, upload.single('file'), ah(async (req
   if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY לא מוגדר' });
+  if (await isHaikuCapReached(prisma)) return res.status(429).json({ error: 'הגעת למכסת הטוקנים החודשית' });
   try {
     const fileData = req.file.buffer.toString('base64');
     const skus = await prisma.sku.findMany({ take: 800 });
@@ -2321,6 +2380,7 @@ ${skuList}
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error?.message || 'שגיאת API');
+    await recordHaikuUsage(prisma, data.usage?.input_tokens, data.usage?.output_tokens);
     const text = data.content[0].text.replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
     const suggested = [];

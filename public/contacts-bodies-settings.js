@@ -40,14 +40,14 @@ function cbsBuildPageShell() {
     <div class="cbs-section">
       <h3 style="margin-bottom:10px">אנשי קשר</h3>
       <div id="cbsContactsTable"></div>
-      <div class="cbs-add-row">
+      ${isReadOnlyMode() ? '' : `<div class="cbs-add-row">
         <input type="text" id="cbsNewName" placeholder="שם"/>
         <input type="text" id="cbsNewEmail" placeholder="מייל"/>
         <input type="text" id="cbsNewPhone" placeholder="טלפון"/>
         <select id="cbsNewBody"></select>
         <select id="cbsNewRole"><option value="">— תפקיד —</option>${CBS_ROLE_OPTIONS.map(r => `<option value="${r}">${r}</option>`).join('')}</select>
         <button class="btn btn-accent" onclick="cbsAddContact()">+ הוסף איש קשר</button>
-      </div>
+      </div>`}
     </div>
     <div class="cbs-section">
       <h3 style="margin-bottom:10px">הגדרות גופי כשרות (מנהל בלבד)</h3>
@@ -96,10 +96,11 @@ function cbsRenderContacts() {
         <td><input type="text" id="cbsPhone_${c.id}" value="${jsAttr(c.phone || '')}"/></td>
         <td><select id="cbsBody_${c.id}">${cbsBodyOptionsHtml(c.kashrutBodyId)}</select></td>
         <td><select id="cbsRole_${c.id}"><option value="">— תפקיד —</option>${CBS_ROLE_OPTIONS.map(r => `<option value="${r}" ${c.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
-        <td><button class="btn btn-outline" style="font-size:12px;padding:3px 10px" onclick="cbsSaveContact(${c.id})">שמור</button></td>
+        <td>${isReadOnlyMode() ? '' : `<button class="btn btn-outline" style="font-size:12px;padding:3px 10px" onclick="cbsSaveContact(${c.id})">שמור</button>`}</td>
       </tr>`).join('')}
     </tbody></table>`;
-  document.getElementById('cbsNewBody').innerHTML = cbsBodyOptionsHtml(null);
+  const newBodySelect = document.getElementById('cbsNewBody');
+  if (newBodySelect) newBodySelect.innerHTML = cbsBodyOptionsHtml(null);
 }
 
 async function cbsSaveContact(id) {
@@ -159,7 +160,7 @@ function cbsRenderBodies() {
         <td><input type="checkbox" id="cbsBodyPassover_${b.id}" ${b.handlesPassover ? 'checked' : ''}/></td>
         <td><input type="number" id="cbsBodySort_${b.id}" value="${b.sortOrder}"/></td>
         <td><select id="cbsBodyContact_${b.id}">${cbsContactOptionsHtml(b.id, b.defaultContactId)}</select></td>
-        <td><button class="btn btn-outline" style="font-size:12px;padding:3px 10px" onclick="cbsSaveBody(${b.id})">שמור</button></td>
+        <td>${isReadOnlyMode() ? '' : `<button class="btn btn-outline" style="font-size:12px;padding:3px 10px" onclick="cbsSaveBody(${b.id})">שמור</button>`}</td>
       </tr>`).join('')}
     </tbody></table>`;
 }

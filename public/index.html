@@ -427,13 +427,28 @@ function applyDoctypeHiddenDefault(selectId,hiddenCheckboxId){
   cb.checked=!VISIBLE_DOCTYPES.includes(doctype);
 }
 
+// S5 fix (11.11.2026): demo mode must be enforced server-side, not just by
+// hiding buttons. authHeaders() is the one function every write call in
+// every screen already goes through (directly, or via apiFetch() below),
+// so adding the header here covers all of them at once instead of having
+// to touch each screen's individual fetch calls.
+function isDemoMode(){
+  try { return new URLSearchParams(location.search).get('demo') === '1'; } catch(e) { return false; }
+}
+// Shared read-only check for every screen's write buttons (hiding them is
+// a UX nicety -- the real enforcement is server-side via the header below).
+function isReadOnlyMode(){
+  return (typeof effectiveRole === 'function' && effectiveRole() === 'assistant') || isDemoMode();
+}
 function authHeaders(){
-  if (token) return {'Authorization': 'Bearer ' + token};
-  if (sessionRole === 'assistant') {
+  const h = {};
+  if (token) h['Authorization'] = 'Bearer ' + token;
+  else if (sessionRole === 'assistant') {
     const ac = sessionStorage.getItem('assistant_code_val') || '';
-    if (ac) return {'X-Assistant-Code': ac};
+    if (ac) h['X-Assistant-Code'] = ac;
   }
-  return {};
+  if (isDemoMode()) h['X-Demo-Mode'] = '1';
+  return h;
 }
 function decodeToken(t){try{return JSON.parse(atob(t.split('.')[1]));}catch{return null;}}
 
@@ -2491,6 +2506,22 @@ function openRoleCodes() {
   document.getElementById('rcViewer').value = '';
   document.getElementById('roleCodesAlert').innerHTML = '';
   document.getElementById('roleCodesModal').classList.add('open');
+  loadHaikuUsageBox();
+}
+// S5 fix (11.11.2026): shows this month's Haiku token usage against
+// IDENTIFY_MONTHLY_TOKEN_CAP, so an admin can see how close the cap is
+// before it silently starts refusing identify requests.
+async function loadHaikuUsageBox() {
+  const box = document.getElementById('haikuUsageBox');
+  box.textContent = 'טוען נתוני שימוש ב-Haiku...';
+  try {
+    const u = await apiFetch('/api/haiku-usage');
+    const total = u.inputTokens + u.outputTokens;
+    const capText = u.cap ? `${total.toLocaleString()} / ${u.cap.toLocaleString()} טוקנים` : `${total.toLocaleString()} טוקנים (ללא מכסה מוגדרת)`;
+    box.innerHTML = `📊 שימוש ב-Haiku בחודש ${u.yearMonth}: ${capText} · ${u.callCount} קריאות`;
+  } catch (e) {
+    box.textContent = 'לא ניתן לטעון נתוני שימוש ב-Haiku';
+  }
 }
 function closeRoleCodes() {
   document.getElementById('roleCodesModal').classList.remove('open');
@@ -2913,6 +2944,7 @@ async function aiIdentifyEdit() {
       <button class="modal-close" onclick="closeRoleCodes()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div id="roleCodesAlert"></div>
+    <div id="haikuUsageBox" style="font-size:.78rem;color:var(--ink3);background:#f7f7f7;border-radius:8px;padding:8px 10px;margin-bottom:.75rem">טוען נתוני שימוש ב-Haiku...</div>
     <div class="form-group">
       <label class="form-label">קוד עוזר (העלאה + עריכה + צפייה)</label>
       <input type="text" class="form-input" id="rcAssistant" placeholder="קוד עוזר..."/>

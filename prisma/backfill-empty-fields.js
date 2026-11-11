@@ -48,7 +48,7 @@ async function main() {
       : { type: 'image', source: { type: 'base64', media_type: mediaType, data: buf.toString('base64') } };
 
     try {
-      const { parsed, usage } = await callHaiku(contentBlock);
+      const { parsed, usage } = await callHaiku(contentBlock, prisma);
       await prisma.docIdentification.update({
         where: { id: r.id },
         data: {

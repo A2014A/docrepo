@@ -123,7 +123,7 @@ function griRenderResults() {
   html += '</div>';
 
   html += `<div class="gri-apply-bar">
-    <button class="btn btn-accent" onclick="griConfirmStub()">✔ קלוט דוחות קבלה</button>
+    ${isReadOnlyMode() ? '' : `<button class="btn btn-accent" onclick="griConfirmStub()">✔ קלוט דוחות קבלה</button>`}
     <span class="gri-hint">שום דבר לא נכתב למסד הנתונים -- תצוגה מקדימה בלבד, הקליטה בפועל טרם מופעלת</span>
   </div>`;
 

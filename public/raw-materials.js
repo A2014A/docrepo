@@ -678,10 +678,11 @@ function rmRenderSummary(rows) {
 // gates write affordances in this screen: the assistant role is read-only
 // per the spec, and so is demo mode (?demo=1) once that's wired up globally
 // -- checked directly here since no shared demo-mode helper exists yet.
+// S5 (11.11.2026): this used to be the only screen with a read-only check
+// at all -- now delegates to the shared global (index.html) so every
+// screen built this sprint uses exactly the same demo/assistant check.
 function rmIsReadOnly() {
-  if (typeof effectiveRole === 'function' && effectiveRole() === 'assistant') return true;
-  try { if (new URLSearchParams(location.search).get('demo') === '1') return true; } catch (e) {}
-  return false;
+  return isReadOnlyMode();
 }
 
 // click-to-edit on the "מקור" column: year-round edits originKashrutText;

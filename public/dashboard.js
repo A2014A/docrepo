@@ -226,7 +226,7 @@ function dashRowActions(cardId, it) {
   if (cardId === 'unprocessed-docs') {
     btns.push(`<button onclick='dashOpenDocPreview(${it.id})'>👁 צפה</button>`);
   }
-  if (cardId === 'new-skus') {
+  if (cardId === 'new-skus' && !isReadOnlyMode()) {
     btns.push(`<button onclick='dashUnmarkNew("${jsAttr(it.code)}")'>הסר סימון חדש</button>`);
   }
   return btns.join('');
@@ -339,8 +339,8 @@ function dashBuildPreviewOverlay() {
       <button class="btn btn-outline" onclick="dashClosePreview()">→ חזרה</button>
       <span id="dashPreviewPos" style="color:#888;font-size:13px"></span>
       <span style="margin-right:auto"></span>
-      <button class="btn btn-outline" onclick="dashOpenArchivePanel()">🗄 העבר לארכיון</button>
-      <button class="btn btn-outline" onclick="dashTrashCurrent()">🗑 העבר לפח</button>
+      ${isReadOnlyMode() ? '' : `<button class="btn btn-outline" onclick="dashOpenArchivePanel()">🗄 העבר לארכיון</button>
+      <button class="btn btn-outline" onclick="dashTrashCurrent()">🗑 העבר לפח</button>`}
       <button class="btn btn-outline" onclick="dashPreviewPrev()" title="הקודם (↑)">↑</button>
       <button class="btn btn-outline" onclick="dashPreviewNext()" title="הבא (↓)">↓</button>
     </div>
@@ -443,10 +443,10 @@ function dashPreviewRenderLeft() {
     ${idHtml}
     <h4 style="margin:14px 0 8px">מק"טים מועמדים</h4>
     <div id="dashPreviewCands"></div>
-    <div style="margin-top:10px;padding:10px;background:#f7f7f7;border-radius:8px">${skuSearchWidgetHtml('dashprev')}</div>
-    <div style="margin-top:8px;color:#888;font-size:11px">✘ דחה הוא סימון מקומי בלבד -- אין נתיב כתיבה נפרד לדחייה. ברגע שתלחצו "✓ קשר", כל מה שלא סומן ✔ יסומן כנדחה בפועל (זו ההתנהגות הקיימת של /link, בדיוק כמו במסך "הצעות קישור").</div>
+    ${isReadOnlyMode() ? '' : `<div style="margin-top:10px;padding:10px;background:#f7f7f7;border-radius:8px">${skuSearchWidgetHtml('dashprev')}</div>
+    <div style="margin-top:8px;color:#888;font-size:11px">✘ דחה הוא סימון מקומי בלבד -- אין נתיב כתיבה נפרד לדחייה. ברגע שתלחצו "✓ קשר", כל מה שלא סומן ✔ יסומן כנדחה בפועל (זו ההתנהגות הקיימת של /link, בדיוק כמו במסך "הצעות קישור").</div>`}
     <div id="dashArchivePanel"></div>`;
-  skuSearchBind('dashprev', dashPreviewPickManualSku);
+  if (!isReadOnlyMode()) skuSearchBind('dashprev', dashPreviewPickManualSku);
   dashPreviewRenderCandidates();
 }
 
@@ -454,23 +454,24 @@ function dashPreviewRenderCandidates() {
   const el = document.getElementById('dashPreviewCands');
   const cands = DASH_PREVIEW_DATA.candidates;
   const confColor = { CERTAIN: '#2e9e4a', LIKELY: '#d9a429', POSSIBLE: '#c0612f' };
+  const ro = isReadOnlyMode();
   const cardsHtml = cands.length ? cands.map(c => {
     const accepted = DASH_PREVIEW_ACCEPTED.has(c.skuId);
     const rejected = DASH_PREVIEW_REJECTED.has(c.skuId);
     return `<div class="dash-cand-card ${accepted ? 'accepted' : ''} ${rejected ? 'rejected' : ''}">
       <div><b>${jsAttr(c.code)}</b> — ${jsAttr(c.name)} <span style="font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;background:${confColor[c.confidence] || '#999'}">${jsAttr(c.confidence)}</span></div>
       <div style="font-size:12px;color:#666">${jsAttr(c.supplier || '')}${c.supplier && c.kashrutBodyRef ? ' · ' : ''}${jsAttr(c.kashrutBodyRef || '')}</div>
-      <div class="dash-cand-actions">
+      ${ro ? '' : `<div class="dash-cand-actions">
         <button onclick="dashPreviewToggleAccept(${c.skuId})">${accepted ? '✓ מסומן (לחיצה לביטול)' : '✔ קשר'}</button>
         <button onclick="dashPreviewReject(${c.skuId})">✘ דחה</button>
-      </div>
+      </div>`}
     </div>`;
   }).join('') : '<p style="color:#888">אין הצעות אוטומטיות למסמך זה. אפשר להוסיף ידנית בעזרת החיפוש שלמטה.</p>';
 
   const n = DASH_PREVIEW_ACCEPTED.size;
   const submitLabel = n === 0 ? '✓ קשר (לא סומנו מק"טים)' : n === 1 ? '✓ קשר למק"ט אחד' : `✓ קשר ל-${n} מק"טים`;
-  el.innerHTML = cardsHtml + `
-    <button class="btn btn-accent" style="width:100%;margin-top:10px" ${n ? '' : 'disabled'} onclick="dashPreviewSubmitAll()">${submitLabel}</button>`;
+  el.innerHTML = cardsHtml + (ro ? '' : `
+    <button class="btn btn-accent" style="width:100%;margin-top:10px" ${n ? '' : 'disabled'} onclick="dashPreviewSubmitAll()">${submitLabel}</button>`);
 }
 
 // One ticked chip per click -- multiple SKUs can be queued before a single
